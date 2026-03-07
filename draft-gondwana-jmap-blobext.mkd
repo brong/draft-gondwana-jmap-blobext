@@ -1,0 +1,179 @@
+---
+title: JMAP Blob Extensions
+abbrev: JMAP Blob Extended
+docname: draft-gondwana-jmap-blobext-00
+submissionType: IETF
+category: std
+updates: 8620
+obsoletes:
+ipr: trust200902
+keyword: Internet-Draft
+stand_alone: yes
+pi: [toc, sortrefs, symrefs]
+
+author:
+ -
+    ins: B. Gondwana
+    name: Bron Gondwana
+    org: Fastmail
+    email: brong@fastmailteam.com
+
+normative:
+    URI-TEMPLATE: RFC6570
+    JMAP-CORE: RFC8620
+    JMAP-BLOB: RFC9404
+    HTTP-RESUMABLE-UPLOADS: I-D.ietf-httpbis-resumable-upload
+
+informative:
+
+--- abstract
+
+The JMAP base protocol (RFC8620) provides the ability to upload and download
+arbitrary binary data.  This binary data is called a "blob", and can be used
+in all other JMAP extensions.
+
+The JMAP blob extension (RFC9404) added additional ways to create and access
+blobs by making inline method calls within a standard JMAP request.
+
+This extension adds more methods to work with blobs, including handling large
+blobs by processing them in chunks (building on RFC9404's blob construction
+support), and providing ways to efficiently describe small changes.
+
+--- middle
+
+# Introduction
+
+The JMAP Blob extension ({{JMAP-BLOB}} — JSON Blob Management) offers additional
+ways to create blobs, and query where they are used.
+
+This extension builds on that work, offering ways to find more information about
+the internal structure of the server's blob store in order to work efficiently
+with it, and ways to efficiently transfer small changes to an existing blob
+without copying all the data.
+
+# Addition to the Capabilities Object
+
+The capabilities object is returned as part of the JMAP Session
+object; see {{JMAP-CORE}}, Section 2.
+
+This document defines an additional capability URI.
+
+## urn:ietf:params:jmap:blobext
+
+The capability `urn:ietf:params:jmap:blobext` being present in the
+"accountCapabilities" property of an account represents support for
+these extended properties on that account.  If this capability is
+present in one or more "accountCapabilities" properties then the
+server MUST also include the key in the "capabilities" property.
+
+The value of this property in the JMAP session "capabilities"
+property MUST be an empty object.
+
+The value of this property in an account's "accountCapabilities"
+property is an object that MUST contain the following information
+on server capabilities and permissions for that account:
+
+* resumableUploadUrl: "String\|null"
+
+    If present, a {{URI-TEMPLATE}} which supports {{HTTP-RESUMABLE-UPLOADS}}.
+    This MAY be the same as the uploadUrl, and has the same keys.
+
+* chunkSize: "UnsignedInt\|null"
+
+    The size in octets which the server users to split large files
+    into chunks.  If a client uploads blobs with exactly this size
+    except for the final chunk, and uses Blob/upload with data
+    blobs containing these chunks, it is expected that the server
+    can optimise these chunks.  Servers MUST allow other sizes
+    for the individual data blocks in Blob/upload though, and will
+    then choose whether to store them as an array of blobs still,
+    or to combine them.
+
+* supportedImageTypes: "String[]"
+
+    The mime types (XXX: add ref) supported for image resizing.
+
+* supportedArchiveTypes: "String[]"
+
+    The archive formats (XXX: add ref) supported for archiving
+
+* supportedCompressionTypes: "String[]"
+
+    The compression types supported for compressing.
+
+
+### Capability Example
+
+TODO
+
+## Additions to Blob/get
+
+Blob/get returns an additional parameter (returned by default when this capability
+is included in `using`)
+
+* chunks: Array[DataSourceObject]
+
+    An array of one or more data source objects.  The file is created by concatenating the
+    DataSourceObjects in the listed order.  While it is expected that DataSourceObjects will
+    include the entire blob and offset, it is legal for the server to give offset and length
+    values which do not cover the entire blob in the same way that Blob/upload can, and
+    client MUST use the length and offset to figure out what to append to the resulting file.
+
+## New method Blob/convert
+
+This is similar to Blob/upload, and takes a single operation create which maps creationids
+to a conversion object.  A conversion object contains one of:
+
+* imageResize: ImageResizeReceipe
+
+* archive: ArchiveRecipe
+
+* unArchive: UnArchiveRecipet
+
+* compress: CompressRecipe
+
+* uncompress: UncompressRecipe
+
+* 
+
+
+
+NOTE: do we want to add any ability to create zip/tar files out of multiple blobs here?
+
+# Security Considerations
+
+Other than the security considerations present in {{JMAP-CORE}} and {{JMAP-BLOB}}, this document
+adds the security considerations around ridff handling, including server load and denial of
+service risks, and any ability to smuggle content through security scanners by splitting it into
+multiple parts is exacerbated by the ability to split things into parts and use rdiff patches.
+
+
+# IANA Considerations
+
+## JMAP Capability Registration for urn:ietf:params:jmap:blobext
+
+IANA is requested to register the "Blob Extended" Capability as follows
+
+Capability: urn:ietf:params:jmap:filenode
+
+Reference: this document
+
+# TODO
+
+* Look into ZIP files, compression, etc.
+
+# Changes
+
+EDITOR: please remove this section before publication.
+
+The source of this document exists on github at: https://github.com/brong/draft-gondwana-jmap-blobext/
+
+**draft-gondwana-jmap-blobext-00**
+
+* initial proposal
+
+# Acknowledgements
+
+TODO
+
+{backmatter}
