@@ -1,7 +1,7 @@
 ---
 title: JMAP Blob Extensions
 abbrev: JMAP Blob Extended
-docname: draft-gondwana-jmap-blobext-00
+docname: draft-gondwana-jmap-blobext-01
 submissionType: IETF
 category: std
 updates: 8620
@@ -22,6 +22,10 @@ normative:
     URI-TEMPLATE: RFC6570
     JMAP-CORE: RFC8620
     JMAP-BLOB: RFC9404
+    MEDIA-TYPES: RFC6838
+    JWE: RFC7516
+    JWA: RFC7518
+    OPENPGP: RFC9580
     HTTP-RESUMABLE-UPLOADS: I-D.ietf-httpbis-resumable-upload
 
 informative:
@@ -37,7 +41,10 @@ blobs by making inline method calls within a standard JMAP request.
 
 This extension adds more methods to work with blobs, including handling large
 blobs by processing them in chunks (building on RFC9404's blob construction
-support), and providing ways to efficiently describe small changes.
+support), and providing server-side blob conversion operations: image format
+conversion, archive creation and extraction (zip, tar, cpio), compression
+and decompression, encryption and decryption, and binary delta (rdiff)
+operations.
 
 --- middle
 
@@ -48,8 +55,14 @@ ways to create blobs, and query where they are used.
 
 This extension builds on that work, offering ways to find more information about
 the internal structure of the server's blob store in order to work efficiently
-with it, and ways to efficiently transfer small changes to an existing blob
-without copying all the data.
+with it, and a new Blob/convert method for server-side blob transformations
+including image format conversion, archive creation and extraction, compression
+and decompression, encryption and decryption, and binary delta (rdiff)
+operations.
+
+## Conventions Used in This Document
+
+{::boilerplate bcp14-tagged}
 
 # Addition to the Capabilities Object
 
@@ -91,82 +104,773 @@ on server capabilities and permissions for that account:
 
 * supportedImageTypes: "String[]"
 
-    The mime types (XXX: add ref) supported for image resizing.
+    The media types ({{MEDIA-TYPES}}) supported for ImageConvertRecipe.
 
 * supportedArchiveTypes: "String[]"
 
-    The archive formats (XXX: add ref) supported for archiving
+    The archive MIME types supported for ArchiveRecipe and UnArchiveRecipe.
+    Defined values are "application/zip", "application/x-tar", and
+    "application/x-cpio".
 
 * supportedCompressionTypes: "String[]"
 
-    The compression types supported for compressing.
+    The compression MIME types supported for CompressRecipe and
+    UncompressRecipe.  Defined values are "application/gzip",
+    "application/x-bzip2", "application/x-xz", and "application/zstd".
 
+* supportedEncryptionTypes: "String[]"
+
+    The encryption container formats supported for EncryptionRecipe and
+    DecryptionRecipe.  Defined values are "application/jose+json"
+    (JSON Web Encryption {{JWE}} in JSON serialization) and
+    "application/pgp-encrypted" (OpenPGP {{OPENPGP}}).
 
 ### Capability Example
 
-TODO
+~~~json
+{
+  "urn:ietf:params:jmap:blobext": {
+    "resumableUploadUrl": null,
+    "chunkSize": 5242880,
+    "supportedImageTypes": [
+      "image/png",
+      "image/jpeg",
+      "image/gif"
+    ],
+    "supportedArchiveTypes": [
+      "application/zip",
+      "application/x-tar"
+    ],
+    "supportedCompressionTypes": [
+      "application/gzip",
+      "application/x-bzip2",
+      "application/zstd"
+    ],
+    "supportedEncryptionTypes": [
+      "application/jose+json"
+    ]
+  }
+}
+~~~
 
 ## Additions to Blob/get
 
 Blob/get returns an additional parameter (returned by default when this capability
 is included in `using`)
 
-* chunks: Array[DataSourceObject]
+* chunks: "DataSourceObject[]"
 
-    An array of one or more data source objects.  The file is created by concatenating the
-    DataSourceObjects in the listed order.  While it is expected that DataSourceObjects will
-    include the entire blob and offset, it is legal for the server to give offset and length
-    values which do not cover the entire blob in the same way that Blob/upload can, and
-    client MUST use the length and offset to figure out what to append to the resulting file.
+    An array of one or more data source objects (as defined in {{JMAP-BLOB}},
+    Section 4.2).  The file is created by concatenating the data source
+    objects in the listed order.  While it is expected that each data source
+    object will include the entire blob via offset and length, it is legal
+    for the server to give offset and length values which do not cover the
+    entire blob in the same way that Blob/upload can, and the client MUST
+    use the length and offset to figure out what to append to the resulting
+    file.
 
 ## New method Blob/convert
 
-This is similar to Blob/upload, and takes a single operation create which maps creationids
-to a conversion object.  A conversion object contains one of:
+Blob/convert performs server-side transformations on blobs.  Like
+Blob/upload ({{JMAP-BLOB}}, Section 4), it takes an `accountId` and a
+`create` argument that maps creation ids to conversion request objects.
 
-* imageResize: ImageResizeReceipe
+Each conversion request object MUST contain exactly one of the
+following properties, which determines the type of conversion:
+
+* imageConvert: ImageConvertRecipe
 
 * archive: ArchiveRecipe
 
-* unArchive: UnArchiveRecipet
+* unArchive: UnArchiveRecipe
 
 * compress: CompressRecipe
 
-* uncompress: UncompressRecipe
+* unCompress: UncompressRecipe
 
-* 
+* encrypt: EncryptionRecipe
 
+* decrypt: DecryptionRecipe
 
+* rdiff: RdiffRecipe
 
-NOTE: do we want to add any ability to create zip/tar files out of multiple blobs here?
+The response has the same structure as Blob/upload ({{JMAP-BLOB}},
+Section 4): a `created` map of creation id to an object containing
+`blobId`, `type`, and `size` for each successful conversion, and a
+`notCreated` map of creation id to a SetError object for each failed
+conversion.  Creation ids from the `created` map may be used as
+backreferences (using the `#` prefix) in subsequent conversions within
+the same Blob/convert call or in later method calls within the same
+JMAP request.
+
+### ImageConvertRecipe
+
+An ImageConvertRecipe converts an image blob to a different format
+or size.  It is an object with the following properties:
+
+* blobId: "BlobId"
+  The blobId of the source image.
+* type: "String"
+  Media type ({{MEDIA-TYPES}}) of the image to create (e.g.
+  "image/png").  MUST be one of the values in the server's
+  `supportedImageTypes` capability.
+* width: "UnsignedInt\|null"
+  Maximum width in pixels of the image to create.  If null, the
+  server preserves the source width (or scales proportionally if
+  only `height` is given).
+* height: "UnsignedInt\|null"
+  Maximum height in pixels of the image to create.  If null, the
+  server preserves the source height (or scales proportionally if
+  only `width` is given).
+* ignoreAspect: "Boolean\|null"
+  If true, resize to exactly the given width and height, even if
+  the aspect ratio is changed.  If null or false, the image is
+  scaled to fit within the given dimensions while preserving the
+  aspect ratio.
+* quality: "UnsignedInt\|null"
+  Compression quality for lossy formats, as a value from 1 (lowest
+  quality, smallest file) to 100 (highest quality, largest file).
+  Only meaningful for formats that support lossy compression such as
+  image/jpeg and image/webp.  If null, the server selects a sensible
+  default.
+* colorSpace: "String\|null"
+  The color space for the output image.  Defined values are "sRGB"
+  and "grayscale".  If null, the server preserves the source image's
+  color space where possible.
+* background: "String\|null"
+  A fill color to use when the source image has transparency but the
+  target format does not support it (e.g. converting PNG to JPEG).
+  The value is a CSS-style hex color string (e.g. "#ffffff" for white).
+  If null, the server selects a sensible default (typically white).
+* stripMetadata: "Boolean\|null"
+  If true, strip image metadata such as EXIF, XMP, and IPTC data from
+  the output.  If null or false, the server preserves metadata where
+  the target format supports it.
+* autoOrient: "Boolean\|null"
+  If true, automatically rotate and flip the image according to its
+  EXIF orientation tag, then reset the tag.  If null or false, the
+  image data is not reoriented.
+
+The result of a successful ImageConvertRecipe is an object with the
+property:
+
+* blobId: "BlobId"
+  The blobId of the converted image.
+
+Errors:
+
+* "blobNotFound" — the referenced blobId does not exist.
+* "invalidArguments" — the type is not in `supportedImageTypes`, or
+  the source blob is not a supported image format.
+
+### ArchiveRecipe
+
+An ArchiveRecipe creates an archive blob from a list of entries.
+It is an object with the following properties:
+
+* type: "String"
+  The MIME type of the archive to create.  MUST be one of the values
+  in the server's `supportedArchiveTypes` capability.  Defined values
+  are "application/zip", "application/x-tar", and "application/x-cpio".
+* entries: "ArchiveEntry[]"
+  An array of ArchiveEntry objects describing the contents of the
+  archive.
+
+The result of a successful ArchiveRecipe is an object with the
+property:
+
+* blobId: "BlobId"
+  The blobId of the newly created archive blob.
+
+Errors:
+
+* "blobNotFound" — a referenced entry blobId does not exist.
+* "invalidArguments" — the type is not in `supportedArchiveTypes`;
+  an entry has an unsupported entryType for the archive format; or
+  a required field (e.g. linkTarget for symlink entries) is missing.
+
+#### ArchiveEntry
+
+An ArchiveEntry describes a single entry in an archive.  It is used
+both as input (in ArchiveRecipe) and as output (in UnArchiveRecipe
+results).  It is an object with the following properties:
+
+* name: "String"
+  The path of the entry within the archive.  Directory entries MUST
+  have a name ending with "/".
+* blobId: "BlobId\|null"
+  The blobId of the content for this entry.  MUST be non-null for
+  file entries.  MUST be null for directory, symlink, hardlink, fifo,
+  and device entries.
+* entryType: "String\|null"
+  The type of the entry.  If null, defaults to "file".  Defined values
+  are "file" (a regular file, the default), "directory", "symlink"
+  (a symbolic link), "hardlink" (a hard link), "fifo" (a named pipe),
+  "blockDevice" (a block device node), and "charDevice" (a character
+  device node).  The server MUST reject entries with unsupported
+  types for the chosen archive format with an "invalidArguments"
+  error.
+* modified: "UTCDate\|null"
+  The modification time of the entry as an RFC 3339 timestamp.
+  If null, defaults to the current server time.
+* linkTarget: "String\|null"
+  The target path for symlink and hardlink entries.  MUST be non-null
+  when entryType is "symlink" or "hardlink".  MUST be null for all
+  other entry types.
+* mode: "String\|null"
+  Unix file permissions as an octal string (e.g. "0755", "0644").
+  If null, the server chooses a reasonable default.  This is
+  represented as a string rather than an integer to avoid ambiguity
+  between octal and decimal interpretation.
+* uid: "UnsignedInt\|null"
+  The numeric user ID of the entry owner.
+* gid: "UnsignedInt\|null"
+  The numeric group ID of the entry owner.
+* ownerName: "String\|null"
+  The user name of the entry owner.
+* groupName: "String\|null"
+  The group name of the entry owner.
+* devMajor: "UnsignedInt\|null"
+  The major device number for "blockDevice" and "charDevice" entries.
+* devMinor: "UnsignedInt\|null"
+  The minor device number for "blockDevice" and "charDevice" entries.
+* comment: "String\|null"
+  A comment string for this entry.
+* compressionMethod: "String\|null"
+  The per-entry compression method.  Defined values are "store" (no
+  compression) and "deflate".  If null, the server chooses a
+  reasonable default.
+
+#### Considerations for application/zip
+
+The zip format only supports "file" and "directory" entry types.
+The `comment` and `compressionMethod` properties are only meaningful
+for zip archives.  The `mode`, `uid`, `gid`, `ownerName`,
+`groupName`, `devMajor`, and `devMinor` properties are ignored.
+
+#### Considerations for application/x-tar
+
+The tar format supports all entry types.  The `mode`, `uid`, `gid`,
+`ownerName`, `groupName`, `devMajor`, and `devMinor` properties are
+meaningful for tar archives.  The `comment` and `compressionMethod`
+properties are ignored.
+
+Tar archives are not inherently compressed.  To create a compressed
+tar archive (e.g. a .tar.gz file), first create the tar archive
+using ArchiveRecipe, then compress the result using CompressRecipe.
+The following example creates a .tar.gz containing three files in a
+single Blob/convert call, using a backreference from the archive
+creation to the compression step:
+
+~~~json
+[["Blob/convert", {
+  "accountId": "abc",
+  "create": {
+    "t1": {
+      "archive": {
+        "type": "application/x-tar",
+        "entries": [
+          {
+            "name": "site/index.html",
+            "blobId": "Baaaa",
+            "modified": "2026-03-01T12:00:00Z",
+            "mode": "0644"
+          },
+          {
+            "name": "site/logo.png",
+            "blobId": "Bbbbb",
+            "modified": "2026-02-15T09:30:00Z",
+            "mode": "0644"
+          },
+          {
+            "name": "site/style.css",
+            "blobId": "Bcccc",
+            "modified": "2026-03-01T12:00:00Z",
+            "mode": "0644"
+          }
+        ]
+      }
+    },
+    "t2": {
+      "compress": {
+        "blobId": "#t1",
+        "type": "application/gzip"
+      }
+    }
+  }
+}, "0"]]
+~~~
+
+#### Considerations for application/x-cpio
+
+The cpio format supports all entry types except that `ownerName` and
+`groupName` are not supported.  The `comment` and
+`compressionMethod` properties are ignored.
+
+### UnArchiveRecipe
+
+An UnArchiveRecipe extracts the entry listing from an existing archive
+blob.  It is an object with the following properties:
+
+* blobId: "BlobId"
+  The blobId of the archive to extract.
+* type: "String\|null"
+  The MIME type of the archive format.  If null, the server SHOULD
+  attempt to auto-detect the format from the blob content (e.g. by
+  inspecting magic bytes).  If auto-detection fails, the server MUST
+  return an "unknownFormat" error.
+
+The result of a successful UnArchiveRecipe is an object with the
+property:
+
+* entries: "ArchiveEntry[]"
+  An array of ArchiveEntry objects describing the contents of the
+  archive.  Each file entry will have a blobId that can be used to
+  access the content of that entry.
+
+Errors:
+
+* "blobNotFound" — the referenced blobId does not exist.
+* "unknownFormat" — the server could not determine or does not support
+  the archive format.
+* "invalidArguments" — the type is not in `supportedArchiveTypes`.
+
+### CompressRecipe
+
+A CompressRecipe compresses a blob using a specified compression
+algorithm.  It is an object with the following properties:
+
+* blobId: "BlobId"
+  The blobId of the data to compress.
+* type: "String"
+  The MIME type of the compression format to use.  MUST be one of the
+  values in the server's `supportedCompressionTypes` capability.
+  Defined values are "application/gzip", "application/x-bzip2",
+  "application/x-xz", and "application/zstd".
+* level: "UnsignedInt\|null"
+  The compression level, where higher values produce smaller output
+  at the cost of more CPU time.  If null, the server uses the
+  format's default level.  The valid range depends on the format.
+  Servers MUST clamp out-of-range values to the nearest valid value.
+* checksum: "Boolean\|null"
+  If true, include an integrity checksum in the compressed output.
+  If null, the server uses the format's default behaviour.
+
+The result of a successful CompressRecipe is an object with the
+property:
+
+* blobId: "BlobId"
+  The blobId of the compressed blob.
+
+Errors:
+
+* "blobNotFound" — the referenced blobId does not exist.
+* "invalidArguments" — the type is not in `supportedCompressionTypes`.
+
+#### Considerations for application/gzip
+
+Compression level ranges from 1 (fastest) to 9 (best compression).
+The default is typically 6.  Gzip always includes a CRC-32 checksum;
+the `checksum` property is ignored.
+
+#### Considerations for application/x-bzip2
+
+Compression level ranges from 1 (fastest, 100k block size) to 9
+(best compression, 900k block size).  The default is typically 9.
+Bzip2 always includes a CRC-32 checksum; the `checksum` property is
+ignored.
+
+#### Considerations for application/x-xz
+
+Compression level ranges from 0 (fastest) to 9 (best compression).
+The default is typically 6.  Xz always includes an integrity check;
+if `checksum` is true the server SHOULD use SHA-256, otherwise CRC-64
+is used by default.
+
+#### Considerations for application/zstd
+
+Compression level ranges from 1 (fastest) to 22 (best compression).
+The default is typically 3.  If `checksum` is true, an xxHash-64
+checksum is included in the frame; the default is false.
+
+### UncompressRecipe
+
+An UncompressRecipe decompresses a compressed blob.  It is an object
+with the following properties:
+
+* blobId: "BlobId"
+  The blobId of the compressed data to decompress.
+* type: "String\|null"
+  The MIME type of the compression format.  If null, the server SHOULD
+  attempt to auto-detect the format from magic bytes.  If auto-detection
+  fails, the server MUST return an "unknownFormat" error.
+
+The result of a successful UncompressRecipe is an object with the
+property:
+
+* blobId: "BlobId"
+  The blobId of the decompressed blob.
+
+Errors:
+
+* "blobNotFound" — the referenced blobId does not exist.
+* "unknownFormat" — the server could not determine or does not support
+  the compression format.
+
+### RdiffRecipe
+
+An RdiffRecipe performs rdiff operations for efficient binary delta
+transfer.  It supports three actions: computing a signature, generating
+a delta, and applying a patch.  It is an object with the following
+properties:
+
+* action: "String"
+  The rdiff operation to perform.  MUST be one of "signature" (compute
+  a signature of the source blob), "delta" (compute a delta between a
+  signature and a new file), or "patch" (apply a delta to a source blob).
+* sourceBlobId: "BlobId"
+  The source blob.  For "signature", this is the file to compute
+  the signature of.  For "delta", this is the signature blob.  For
+  "patch", this is the basis file to apply the delta to.
+* deltaBlobId: "BlobId\|null"
+  The delta blob to apply.  MUST be non-null when action is "patch".
+  MUST be null otherwise.
+* newFileBlobId: "BlobId\|null"
+  The new file to compute a delta against.  MUST be non-null when
+  action is "delta".  MUST be null otherwise.
+* blockSize: "UnsignedInt\|null"
+  The signature block size in bytes.  Only meaningful when action is
+  "signature".  Smaller blocks produce more precise deltas but larger
+  signature files.  If null, the server selects a default based on
+  the source file size.
+* strongHashAlgorithm: "String\|null"
+  The hash algorithm used for strong checksums in the signature.
+  Only meaningful when action is "signature".  Defined values are
+  "blake2" and "md4".  If null, the server selects a sensible default
+  (typically "blake2").  Note that "md4" is provided only for
+  compatibility with older rdiff implementations; new signatures
+  SHOULD use "blake2".
+
+The result of a successful RdiffRecipe is an object with the
+property:
+
+* blobId: "BlobId"
+  The blobId of the result.  For "signature", this is the signature
+  blob.  For "delta", this is the delta blob.  For "patch", this is
+  the patched file.
+
+Errors:
+
+* "blobNotFound" — a referenced blobId does not exist.
+* "invalidArguments" — the action is not one of the defined values;
+  a required blobId (deltaBlobId or newFileBlobId) is missing for the
+  given action; or a blobId was provided for a field that should be
+  null for the given action.
+
+### EncryptionRecipe
+
+An EncryptionRecipe encrypts a blob.  It supports password-based,
+public key, and symmetric key encryption.  It is an object with the
+following properties:
+
+* blobId: "BlobId"
+  The blobId of the data to encrypt.
+* type: "String"
+  The encryption container format to use.  MUST be one of the values
+  in the server's `supportedEncryptionTypes` capability.
+* passphrase: "String\|null"
+  A passphrase for password-based encryption.  The passphrase is
+  processed through a key derivation function to produce the
+  encryption key.  Exactly one of `passphrase` or `keyBlobId` MUST
+  be provided.
+* keyBlobId: "BlobId\|null"
+  The blobId of the key material to encrypt with.  This may be a
+  public key (for asymmetric encryption) or a symmetric key (for
+  direct symmetric encryption).  The format of the key material
+  depends on the `type`.  This may be a backreference to a blob
+  created by an earlier Blob/upload in the same JMAP request.
+  Exactly one of `passphrase` or `keyBlobId` MUST be provided.
+* algorithm: "String\|null"
+  A preferred content encryption algorithm.  The defined values
+  depend on the `type`.  If null, the server selects a sensible
+  default.
+
+Servers SHOULD comply with the algorithm strength recommendations in
+the Security Considerations section of this document.
+
+The result of a successful EncryptionRecipe is an object with the
+property:
+
+* blobId: "BlobId"
+  The blobId of the encrypted blob.
+
+Errors:
+
+* "blobNotFound" — the referenced blobId (data or key) does not exist.
+* "invalidArguments" — both or neither of `passphrase` and `keyBlobId`
+  were provided; the type is not in `supportedEncryptionTypes`; the
+  requested algorithm is not supported; or the key material is
+  malformed or inappropriate for the requested type.
+
+### DecryptionRecipe
+
+A DecryptionRecipe decrypts an encrypted blob.  It is an object with
+the following properties:
+
+* blobId: "BlobId"
+  The blobId of the encrypted data to decrypt.
+* type: "String\|null"
+  The encryption container format.  If null, the server SHOULD
+  attempt to auto-detect the format.  If auto-detection fails, the
+  server MUST return an "unknownFormat" error.
+* passphrase: "String\|null"
+  The passphrase for password-based decryption.  Exactly one of
+  `passphrase` or `keyBlobId` MUST be provided.
+* keyBlobId: "BlobId\|null"
+  The blobId of the key material to decrypt with.  This may be a
+  private key (for asymmetric decryption) or a symmetric key (the
+  same key used for encryption).  The format of the key material
+  depends on the `type`.  This may be a backreference to a blob
+  created by an earlier Blob/upload in the same JMAP request.
+  Exactly one of `passphrase` or `keyBlobId` MUST be provided.
+
+The result of a successful DecryptionRecipe is an object with the
+property:
+
+* blobId: "BlobId"
+  The blobId of the decrypted blob.
+
+Errors:
+
+* "blobNotFound" — the referenced blobId (data or key) does not exist.
+* "unknownFormat" — the server could not determine or does not support
+  the encryption format.
+* "invalidArguments" — both or neither of `passphrase` and `keyBlobId`
+  were provided; or the key material is malformed.
+* "decryptionFailed" — the server was unable to decrypt the blob.
+  This includes wrong passphrase, wrong key, integrity check failure,
+  or corrupt ciphertext.  Servers SHOULD use the same error for all
+  these cases to avoid leaking information about why decryption
+  failed.
+
+#### Considerations for application/jose+json
+
+The output format is JSON Web Encryption {{JWE}} in JSON
+serialization.
+
+For `keyBlobId`, the key material MUST be a JWK or JWK Set
+({{JWA}}).  A JWK with `kty` "oct" indicates a symmetric key, and
+the server will use direct key agreement or AES key wrapping as
+appropriate.  For decryption with an asymmetric key, the JWK MUST
+contain the private key.
+
+The key management algorithm (JWE "alg" header) is inferred from
+the key material: PBES2 for passphrase-based, RSA-OAEP or ECDH-ES
+for asymmetric keys, and "dir" or AES key wrapping for symmetric
+keys.
+
+For `algorithm`, the value is the "enc" content encryption algorithm
+from the IANA JOSE registry (e.g. "A256GCM", "A128CBC-HS256").
+
+#### Considerations for application/pgp-encrypted
+
+The output format is an OpenPGP encrypted message {{OPENPGP}}.
+
+For `keyBlobId` when encrypting, the key material MUST be an OpenPGP
+transferable public key.  For decryption, it MUST be an OpenPGP
+transferable secret key.  Symmetric key encryption is not supported
+for this type; use `passphrase` instead.
+
+For `algorithm`, the value is the OpenPGP symmetric algorithm name
+(e.g. "aes256").
 
 # Security Considerations
 
-Other than the security considerations present in {{JMAP-CORE}} and {{JMAP-BLOB}}, this document
-adds the security considerations around ridff handling, including server load and denial of
-service risks, and any ability to smuggle content through security scanners by splitting it into
-multiple parts is exacerbated by the ability to split things into parts and use rdiff patches.
+All security considerations from {{JMAP-CORE}} and {{JMAP-BLOB}} apply
+to this document.
+
+## Resource Consumption
+
+Several operations defined in this document can consume significant
+server resources.
+
+Archive and compression operations may require substantial CPU and
+memory.  Servers SHOULD impose reasonable limits on archive size,
+number of entries, nesting depth of archives within archives,
+compression ratios (to mitigate zip bomb attacks), and total
+processing time.  Servers SHOULD reject requests that would exceed
+these limits with a "serverFail" error.
+
+The rdiff operations can also be resource-intensive, particularly
+for large blobs.  Servers SHOULD impose limits on the size of blobs
+that can be used as inputs to rdiff operations.
+
+## Archive Path Traversal
+
+Archive formats allow entry names containing path separators and
+relative path components such as "../".  Malicious archives may use
+names like "../../etc/passwd" to attempt directory traversal.  While
+UnArchiveRecipe only returns entry metadata and blob references
+(not files on the server filesystem), clients that extract archive
+contents to a filesystem MUST validate entry names and reject or
+sanitize paths containing ".." components or absolute paths.
+Servers SHOULD reject ArchiveRecipe requests containing entry names
+with ".." path components.
+
+## Content Smuggling
+
+The ability to split content into multiple blobs, recombine them via
+Blob/upload, and apply rdiff patches may be used to bypass security
+scanners that inspect blob content.  Servers that perform content
+scanning SHOULD scan the output of Blob/convert operations as well
+as the inputs.
+
+## Encryption Threat Model
+
+The EncryptionRecipe and DecryptionRecipe operations are performed
+on the server.  This means the server has access to the plaintext,
+the key material (or passphrase), and the ciphertext.  This
+extension does NOT provide end-to-end encryption and MUST NOT be
+relied upon to protect data from the server operator.
+
+The intended use cases for server-side encryption are:
+
+* Encrypting data to a recipient's public key before the server
+  stores or transmits it (the server sees the plaintext transiently
+  but does not retain it).
+* Password-based encryption of data before download, so the data
+  is encrypted at rest on the client.
+* Decrypting uploaded encrypted data so the server can index or
+  process it (e.g. decrypting an encrypted backup for server-side
+  search).
+
+Clients that require protection from the server itself MUST perform
+encryption and decryption client-side.
+
+## Key Material Handling
+
+Clients MUST only send key material and passphrases over connections
+protected by TLS, as required by {{JMAP-CORE}}.
+
+Servers MUST NOT log, persist, or cache passphrases or private key
+material beyond the lifetime of the individual JMAP request.
+Servers SHOULD process key material in memory and zeroize it
+promptly after use.
+
+When a symmetric key is provided via `keyBlobId`, both the key and
+the encrypted data reside on the same server.  Clients should
+understand that this provides no confidentiality protection against
+the server.  This mode is primarily useful for format conversion
+(e.g. re-encrypting data from one format to another) or for
+decrypting client-uploaded encrypted content for server-side
+processing.
+
+When a private key is provided via `keyBlobId` for decryption, the
+client is trusting the server with the private key.  Clients SHOULD
+use per-purpose key pairs rather than providing long-lived identity
+keys.  Clients SHOULD revoke or rotate keys that have been sent to
+a server.
+
+## Algorithm Strength
+
+At the time of this publication, servers SHOULD only offer encryption
+algorithms providing at least 128 bits of security strength for
+EncryptionRecipe.  For "application/jose+json", servers SHOULD NOT
+support the "RSA1\_5" key management algorithm due to known padding
+oracle vulnerabilities (see {{JWE}} Section 11.5).  For
+"application/pgp-encrypted", servers SHOULD NOT support TripleDES
+(algorithm ID 2), CAST5 (algorithm ID 3), or Blowfish
+(algorithm ID 4).
+
+Implementors SHOULD monitor current cryptographic best practice and
+remove algorithms from EncryptionRecipe support as they are found
+to be no longer secure.
+
+However, DecryptionRecipe may need to handle data encrypted with
+older algorithms in order to allow users to access their existing
+data.  Servers MAY support a wider set of algorithms for decryption
+than for encryption, and SHOULD NOT remove decryption support for an
+algorithm while data encrypted with that algorithm remains in wide
+use, as doing so would harm interoperability.  Servers SHOULD
+encourage migration by supporting re-encryption to stronger
+algorithms via a combination of DecryptionRecipe and
+EncryptionRecipe.
+
+## Decryption Error Handling
+
+Decryption failures MUST return a generic "decryptionFailed" error
+regardless of the specific cause (wrong key, wrong passphrase,
+integrity check failure, or malformed ciphertext).  Distinguishing
+between these failure modes could enable padding oracle or other
+chosen-ciphertext attacks.
 
 
 # IANA Considerations
 
 ## JMAP Capability Registration for urn:ietf:params:jmap:blobext
 
-IANA is requested to register the "Blob Extended" Capability as follows
+IANA is requested to register the "Blob Extended" Capability as follows:
 
-Capability: urn:ietf:params:jmap:filenode
+Capability Name: urn:ietf:params:jmap:blobext
+
+Intended use: common
+
+Change Controller: IETF
+
+Specification document: this document
+
+Security and privacy considerations: this document, Security Considerations
+
+## JMAP Error Code Registrations
+
+IANA is requested to register the following entries in the "JMAP
+Error Codes" registry:
+
+### unknownFormat
+
+JMAP Error Code: unknownFormat
+
+Intended use: common
+
+Change Controller: IETF
+
+Description: The server could not determine the format of the blob,
+or the detected format is not supported.  This error is returned
+when auto-detection of archive, compression, or encryption format
+fails, or when the blob content does not match the specified format.
 
 Reference: this document
 
-# TODO
+### decryptionFailed
 
-* Look into ZIP files, compression, etc.
+JMAP Error Code: decryptionFailed
+
+Intended use: common
+
+Change Controller: IETF
+
+Description: The server was unable to decrypt the blob.  This error
+is deliberately generic to avoid leaking information about why
+decryption failed (wrong key, wrong passphrase, integrity check
+failure, or corrupt ciphertext) which could enable oracle attacks.
+
+Reference: this document
 
 # Changes
 
 EDITOR: please remove this section before publication.
 
 The source of this document exists on github at: https://github.com/brong/draft-gondwana-jmap-blobext/
+
+**draft-gondwana-jmap-blobext-01**
+
+* Added Blob/convert method with recipes for image conversion, archiving,
+  compression, encryption, and rdiff.
+* Removed rdiffSignature and rdiffPatch from Blob/get and DataSourceObject.
+* Fleshed out capability object with supported type lists.
+* Added capability and method examples.
+* Expanded Security Considerations.
+* Updated IANA registrations with error codes and corrected capability URI.
 
 **draft-gondwana-jmap-blobext-00**
 
