@@ -196,10 +196,12 @@ following properties, which determines the type of conversion:
 
 The response has the same structure as Blob/upload ({{JMAP-BLOB}},
 Section 4): a `created` map of creation id to an object containing
-`blobId`, `type`, and `size` for each successful conversion, and a
+`id`, `type`, and `size` for each successful conversion, and a
 `notCreated` map of creation id to a SetError object for each failed
-conversion.  Creation ids from the `created` map may be used as
-backreferences (using the `#` prefix) in subsequent conversions within
+conversion.  The `id` is the blobId of the created blob.  The server
+MAY also return an `expires` property as described in {{JMAP-CORE}},
+Section 6.1.  Creation id backreferences (using the `#` prefix)
+resolve to this `id` and may be used in subsequent conversions within
 the same Blob/convert call or in later method calls within the same
 JMAP request.
 
@@ -251,12 +253,6 @@ or size.  It is an object with the following properties:
   EXIF orientation tag, then reset the tag.  If null or false, the
   image data is not reoriented.
 
-The result of a successful ImageConvertRecipe is an object with the
-property:
-
-* blobId: "BlobId"
-  The blobId of the converted image.
-
 Errors:
 
 * "blobNotFound" — the referenced blobId does not exist.
@@ -275,12 +271,6 @@ It is an object with the following properties:
 * entries: "ArchiveEntry[]"
   An array of ArchiveEntry objects describing the contents of the
   archive.
-
-The result of a successful ArchiveRecipe is an object with the
-property:
-
-* blobId: "BlobId"
-  The blobId of the newly created archive blob.
 
 Errors:
 
@@ -420,8 +410,8 @@ blob.  It is an object with the following properties:
   inspecting magic bytes).  If auto-detection fails, the server MUST
   return an "unknownFormat" error.
 
-The result of a successful UnArchiveRecipe is an object with the
-property:
+In addition to the standard creation response properties, a
+successful UnArchiveRecipe result includes:
 
 * entries: "ArchiveEntry[]"
   An array of ArchiveEntry objects describing the contents of the
@@ -455,12 +445,6 @@ algorithm.  It is an object with the following properties:
 * checksum: "Boolean\|null"
   If true, include an integrity checksum in the compressed output.
   If null, the server uses the format's default behaviour.
-
-The result of a successful CompressRecipe is an object with the
-property:
-
-* blobId: "BlobId"
-  The blobId of the compressed blob.
 
 Errors:
 
@@ -505,12 +489,6 @@ with the following properties:
   attempt to auto-detect the format from magic bytes.  If auto-detection
   fails, the server MUST return an "unknownFormat" error.
 
-The result of a successful UncompressRecipe is an object with the
-property:
-
-* blobId: "BlobId"
-  The blobId of the decompressed blob.
-
 Errors:
 
 * "blobNotFound" — the referenced blobId does not exist.
@@ -551,13 +529,8 @@ properties:
   compatibility with older rdiff implementations; new signatures
   SHOULD use "blake2".
 
-The result of a successful RdiffRecipe is an object with the
-property:
-
-* blobId: "BlobId"
-  The blobId of the result.  For "signature", this is the signature
-  blob.  For "delta", this is the delta blob.  For "patch", this is
-  the patched file.
+For "signature", the result blob is the signature.  For "delta",
+it is the delta.  For "patch", it is the patched file.
 
 Errors:
 
@@ -598,12 +571,6 @@ following properties:
 Servers SHOULD comply with the algorithm strength recommendations in
 the Security Considerations section of this document.
 
-The result of a successful EncryptionRecipe is an object with the
-property:
-
-* blobId: "BlobId"
-  The blobId of the encrypted blob.
-
 Errors:
 
 * "blobNotFound" — the referenced blobId (data or key) does not exist.
@@ -633,12 +600,6 @@ the following properties:
   depends on the `type`.  This may be a backreference to a blob
   created by an earlier Blob/upload in the same JMAP request.
   Exactly one of `passphrase` or `keyBlobId` MUST be provided.
-
-The result of a successful DecryptionRecipe is an object with the
-property:
-
-* blobId: "BlobId"
-  The blobId of the decrypted blob.
 
 Errors:
 
