@@ -1,7 +1,7 @@
 ---
 title: JMAP Blob Extensions
 abbrev: JMAP Blob Extended
-docname: draft-gondwana-jmap-blobext-02
+docname: draft-gondwana-jmap-blobext-03
 submissionType: IETF
 category: std
 updates: 8620
@@ -23,9 +23,6 @@ normative:
     JMAP-CORE: RFC8620
     JMAP-BLOB: RFC9404
     MEDIA-TYPES: RFC6838
-    JWE: RFC7516
-    JWA: RFC7518
-    OPENPGP: RFC9580
     HTTP-RESUMABLE-UPLOADS: I-D.ietf-httpbis-resumable-upload
 
 informative:
@@ -43,8 +40,7 @@ This extension adds more methods to work with blobs, including handling large
 blobs by processing them in chunks (building on RFC9404's blob construction
 support), and providing server-side blob conversion operations: image format
 conversion, archive creation and extraction (zip, tar, cpio), compression
-and decompression, encryption and decryption, and binary delta (rdiff)
-operations.
+and decompression, and binary delta (rdiff) operations.
 
 --- middle
 
@@ -57,8 +53,7 @@ This extension builds on that work, offering ways to find more information about
 the internal structure of the server's blob store in order to work efficiently
 with it, and a new Blob/convert method for server-side blob transformations
 including image format conversion, archive creation and extraction, compression
-and decompression, encryption and decryption, and binary delta (rdiff)
-operations.
+and decompression, and binary delta (rdiff) operations.
 
 ## Conventions Used in This Document
 
@@ -118,13 +113,6 @@ on server capabilities and permissions for that account:
     UncompressRecipe.  Defined values are "application/gzip",
     "application/x-bzip2", "application/x-xz", and "application/zstd".
 
-* supportedEncryptionTypes: "String[]"
-
-    The encryption container formats supported for EncryptionRecipe and
-    DecryptionRecipe.  Defined values are "application/jose+json"
-    (JSON Web Encryption {{JWE}} in JSON serialization) and
-    "application/pgp-encrypted" (OpenPGP {{OPENPGP}}).
-
 ### Capability Example
 
 ~~~json
@@ -145,9 +133,6 @@ on server capabilities and permissions for that account:
       "application/gzip",
       "application/x-bzip2",
       "application/zstd"
-    ],
-    "supportedEncryptionTypes": [
-      "application/jose+json"
     ]
   }
 }
@@ -212,10 +197,6 @@ following properties, which determines the type of conversion:
 * compress: CompressRecipe
 
 * unCompress: UncompressRecipe
-
-* encrypt: EncryptionRecipe
-
-* decrypt: DecryptionRecipe
 
 * rdiff: RdiffRecipe
 
@@ -565,111 +546,6 @@ Errors:
   given action; or a blobId was provided for a field that should be
   null for the given action.
 
-### EncryptionRecipe
-
-An EncryptionRecipe encrypts a blob.  It supports password-based,
-public key, and symmetric key encryption.  It is an object with the
-following properties:
-
-* blobId: "BlobId"
-  The blobId of the data to encrypt.
-* type: "String"
-  The encryption container format to use.  MUST be one of the values
-  in the server's `supportedEncryptionTypes` capability.
-* passphrase: "String\|null"
-  A passphrase for password-based encryption.  The passphrase is
-  processed through a key derivation function to produce the
-  encryption key.  Exactly one of `passphrase` or `keyBlobId` MUST
-  be provided.
-* keyBlobId: "BlobId\|null"
-  The blobId of the key material to encrypt with.  This may be a
-  public key (for asymmetric encryption) or a symmetric key (for
-  direct symmetric encryption).  The format of the key material
-  depends on the `type`.  This may be a backreference to a blob
-  created by an earlier Blob/upload in the same JMAP request.
-  Exactly one of `passphrase` or `keyBlobId` MUST be provided.
-* algorithm: "String\|null"
-  A preferred content encryption algorithm.  The defined values
-  depend on the `type`.  If null, the server selects a sensible
-  default.
-
-Servers SHOULD comply with the algorithm strength recommendations in
-the Security Considerations section of this document.
-
-Errors:
-
-* "blobNotFound" — the referenced blobId (data or key) does not exist.
-* "invalidArguments" — both or neither of `passphrase` and `keyBlobId`
-  were provided; the type is not in `supportedEncryptionTypes`; the
-  requested algorithm is not supported; or the key material is
-  malformed or inappropriate for the requested type.
-
-### DecryptionRecipe
-
-A DecryptionRecipe decrypts an encrypted blob.  It is an object with
-the following properties:
-
-* blobId: "BlobId"
-  The blobId of the encrypted data to decrypt.
-* type: "String\|null"
-  The encryption container format.  If null, the server SHOULD
-  attempt to auto-detect the format.  If auto-detection fails, the
-  server MUST return an "unknownFormat" error.
-* passphrase: "String\|null"
-  The passphrase for password-based decryption.  Exactly one of
-  `passphrase` or `keyBlobId` MUST be provided.
-* keyBlobId: "BlobId\|null"
-  The blobId of the key material to decrypt with.  This may be a
-  private key (for asymmetric decryption) or a symmetric key (the
-  same key used for encryption).  The format of the key material
-  depends on the `type`.  This may be a backreference to a blob
-  created by an earlier Blob/upload in the same JMAP request.
-  Exactly one of `passphrase` or `keyBlobId` MUST be provided.
-
-Errors:
-
-* "blobNotFound" — the referenced blobId (data or key) does not exist.
-* "unknownFormat" — the server could not determine or does not support
-  the encryption format.
-* "invalidArguments" — both or neither of `passphrase` and `keyBlobId`
-  were provided; or the key material is malformed.
-* "decryptionFailed" — the server was unable to decrypt the blob.
-  This includes wrong passphrase, wrong key, integrity check failure,
-  or corrupt ciphertext.  Servers SHOULD use the same error for all
-  these cases to avoid leaking information about why decryption
-  failed.
-
-#### Considerations for application/jose+json
-
-The output format is JSON Web Encryption {{JWE}} in JSON
-serialization.
-
-For `keyBlobId`, the key material MUST be a JWK or JWK Set
-({{JWA}}).  A JWK with `kty` "oct" indicates a symmetric key, and
-the server will use direct key agreement or AES key wrapping as
-appropriate.  For decryption with an asymmetric key, the JWK MUST
-contain the private key.
-
-The key management algorithm (JWE "alg" header) is inferred from
-the key material: PBES2 for passphrase-based, RSA-OAEP or ECDH-ES
-for asymmetric keys, and "dir" or AES key wrapping for symmetric
-keys.
-
-For `algorithm`, the value is the "enc" content encryption algorithm
-from the IANA JOSE registry (e.g. "A256GCM", "A128CBC-HS256").
-
-#### Considerations for application/pgp-encrypted
-
-The output format is an OpenPGP encrypted message {{OPENPGP}}.
-
-For `keyBlobId` when encrypting, the key material MUST be an OpenPGP
-transferable public key.  For decryption, it MUST be an OpenPGP
-transferable secret key.  Symmetric key encryption is not supported
-for this type; use `passphrase` instead.
-
-For `algorithm`, the value is the OpenPGP symmetric algorithm name
-(e.g. "aes256").
-
 # Security Considerations
 
 All security considerations from {{JMAP-CORE}} and {{JMAP-BLOB}} apply
@@ -711,86 +587,6 @@ scanners that inspect blob content.  Servers that perform content
 scanning SHOULD scan the output of Blob/convert operations as well
 as the inputs.
 
-## Encryption Threat Model
-
-The EncryptionRecipe and DecryptionRecipe operations are performed
-on the server.  This means the server has access to the plaintext,
-the key material (or passphrase), and the ciphertext.  This
-extension does NOT provide end-to-end encryption and MUST NOT be
-relied upon to protect data from the server operator.
-
-The intended use cases for server-side encryption are:
-
-* Encrypting data to a recipient's public key before the server
-  stores or transmits it (the server sees the plaintext transiently
-  but does not retain it).
-* Password-based encryption of data before download, so the data
-  is encrypted at rest on the client.
-* Decrypting uploaded encrypted data so the server can index or
-  process it (e.g. decrypting an encrypted backup for server-side
-  search).
-
-Clients that require protection from the server itself MUST perform
-encryption and decryption client-side.
-
-## Key Material Handling
-
-Clients MUST only send key material and passphrases over connections
-protected by TLS, as required by {{JMAP-CORE}}.
-
-Servers MUST NOT log, persist, or cache passphrases or private key
-material beyond the lifetime of the individual JMAP request.
-Servers SHOULD process key material in memory and zeroize it
-promptly after use.
-
-When a symmetric key is provided via `keyBlobId`, both the key and
-the encrypted data reside on the same server.  Clients should
-understand that this provides no confidentiality protection against
-the server.  This mode is primarily useful for format conversion
-(e.g. re-encrypting data from one format to another) or for
-decrypting client-uploaded encrypted content for server-side
-processing.
-
-When a private key is provided via `keyBlobId` for decryption, the
-client is trusting the server with the private key.  Clients SHOULD
-use per-purpose key pairs rather than providing long-lived identity
-keys.  Clients SHOULD revoke or rotate keys that have been sent to
-a server.
-
-## Algorithm Strength
-
-At the time of this publication, servers SHOULD only offer encryption
-algorithms providing at least 128 bits of security strength for
-EncryptionRecipe.  For "application/jose+json", servers SHOULD NOT
-support the "RSA1\_5" key management algorithm due to known padding
-oracle vulnerabilities (see {{JWE}} Section 11.5).  For
-"application/pgp-encrypted", servers SHOULD NOT support TripleDES
-(algorithm ID 2), CAST5 (algorithm ID 3), or Blowfish
-(algorithm ID 4).
-
-Implementors SHOULD monitor current cryptographic best practice and
-remove algorithms from EncryptionRecipe support as they are found
-to be no longer secure.
-
-However, DecryptionRecipe may need to handle data encrypted with
-older algorithms in order to allow users to access their existing
-data.  Servers MAY support a wider set of algorithms for decryption
-than for encryption, and SHOULD NOT remove decryption support for an
-algorithm while data encrypted with that algorithm remains in wide
-use, as doing so would harm interoperability.  Servers SHOULD
-encourage migration by supporting re-encryption to stronger
-algorithms via a combination of DecryptionRecipe and
-EncryptionRecipe.
-
-## Decryption Error Handling
-
-Decryption failures MUST return a generic "decryptionFailed" error
-regardless of the specific cause (wrong key, wrong passphrase,
-integrity check failure, or malformed ciphertext).  Distinguishing
-between these failure modes could enable padding oracle or other
-chosen-ciphertext attacks.
-
-
 # IANA Considerations
 
 ## JMAP Capability Registration for urn:ietf:params:jmap:blobext
@@ -822,23 +618,8 @@ Change Controller: IETF
 
 Description: The server could not determine the format of the blob,
 or the detected format is not supported.  This error is returned
-when auto-detection of archive, compression, or encryption format
-fails, or when the blob content does not match the specified format.
-
-Reference: this document
-
-### decryptionFailed
-
-JMAP Error Code: decryptionFailed
-
-Intended use: common
-
-Change Controller: IETF
-
-Description: The server was unable to decrypt the blob.  This error
-is deliberately generic to avoid leaking information about why
-decryption failed (wrong key, wrong passphrase, integrity check
-failure, or corrupt ciphertext) which could enable oracle attacks.
+when auto-detection of archive or compression format fails, or when
+the blob content does not match the specified format.
 
 Reference: this document
 
@@ -847,6 +628,11 @@ Reference: this document
 EDITOR: please remove this section before publication.
 
 The source of this document exists on github at: https://github.com/brong/draft-gondwana-jmap-blobext/
+
+**draft-gondwana-jmap-blobext-03**
+
+* Removed encryption and decryption recipes and related security
+  considerations; these will be specified separately.
 
 **draft-gondwana-jmap-blobext-02**
 
