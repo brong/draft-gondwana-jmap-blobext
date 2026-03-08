@@ -1,7 +1,7 @@
 ---
 title: JMAP Blob Extensions
 abbrev: JMAP Blob Extended
-docname: draft-gondwana-jmap-blobext-01
+docname: draft-gondwana-jmap-blobext-02
 submissionType: IETF
 category: std
 updates: 8620
@@ -169,11 +169,36 @@ is included in `using`)
     use the length and offset to figure out what to append to the resulting
     file.
 
+## Additions to Blob/upload
+
+When this capability is present, Blob/upload ({{JMAP-BLOB}}, Section 4)
+gains the following additional request property:
+
+* noPersist: "Boolean" (default: false)
+  If true, blobs created by this call are ephemeral: they may be
+  referenced via creation id backreferences within the same JMAP
+  request, but the server is not required to persist them beyond the
+  lifetime of the request.  The server MAY omit ephemeral blobs from
+  the `created` map of the response and from the `createdIds` of the
+  final Response object if it did not create a referenceable blob.
+  This allows servers to optimise pipelines where intermediate blobs
+  are never needed after the request completes.
+
 ## New method Blob/convert
 
 Blob/convert performs server-side transformations on blobs.  Like
 Blob/upload ({{JMAP-BLOB}}, Section 4), it takes an `accountId` and a
 `create` argument that maps creation ids to conversion request objects.
+
+Each conversion request object MAY also include the following property:
+
+* noPersist: "Boolean" (default: false)
+  If true, the resulting blob is ephemeral: it may be referenced via
+  creation id backreferences within the same JMAP request, but the
+  server is not required to persist it beyond the lifetime of the
+  request.  The server MAY omit ephemeral blobs from the `created`
+  map of the response and from the `createdIds` of the final Response
+  object if it did not create a referenceable blob.
 
 Each conversion request object MUST contain exactly one of the
 following properties, which determines the type of conversion:
@@ -822,6 +847,13 @@ Reference: this document
 EDITOR: please remove this section before publication.
 
 The source of this document exists on github at: https://github.com/brong/draft-gondwana-jmap-blobext/
+
+**draft-gondwana-jmap-blobext-02**
+
+* Added noPersist option to Blob/upload and Blob/convert for ephemeral
+  intermediate blobs in pipelines.
+* Standardised Blob/convert response to use `id` with `type`, `size`,
+  and optional `expires`, matching Blob/upload.
 
 **draft-gondwana-jmap-blobext-01**
 
