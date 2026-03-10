@@ -1,7 +1,7 @@
 ---
 title: JMAP Blob Extensions
 abbrev: JMAP Blob Extended
-docname: draft-gondwana-jmap-blobext-03
+docname: draft-gondwana-jmap-blobext-01
 submissionType: IETF
 category: std
 updates: 8620
@@ -546,6 +546,192 @@ Errors:
   given action; or a blobId was provided for a field that should be
   null for the given action.
 
+# Examples
+
+## Creating a Zip Archive
+
+This example creates a zip file containing an HTML document, a CSS
+file, and a JPEG image:
+
+~~~json
+[["Blob/convert", {
+  "accountId": "abc",
+  "create": {
+    "z1": {
+      "archive": {
+        "type": "application/zip",
+        "entries": [
+          {
+            "name": "site/index.html",
+            "blobId": "Baaaa"
+          },
+          {
+            "name": "site/style.css",
+            "blobId": "Bbbbb"
+          },
+          {
+            "name": "site/photo.jpg",
+            "blobId": "Bcccc"
+          }
+        ]
+      }
+    }
+  }
+}, "0"]]
+~~~
+
+The response includes the blobId, type, and size of the created
+archive:
+
+~~~json
+[["Blob/convert", {
+  "accountId": "abc",
+  "created": {
+    "z1": {
+      "id": "B9f2a4e",
+      "type": "application/zip",
+      "size": 104857
+    }
+  },
+  "notCreated": {}
+}, "0"]]
+~~~
+
+## Creating a Compressed Tar Archive
+
+This example creates a .tar.gz file from the same three files.
+The intermediate tar blob uses `noPersist` since only the final
+compressed result is needed:
+
+~~~json
+[["Blob/convert", {
+  "accountId": "abc",
+  "create": {
+    "t1": {
+      "noPersist": true,
+      "archive": {
+        "type": "application/x-tar",
+        "entries": [
+          {
+            "name": "site/index.html",
+            "blobId": "Baaaa",
+            "modified": "2026-03-01T12:00:00Z",
+            "mode": "0644"
+          },
+          {
+            "name": "site/style.css",
+            "blobId": "Bbbbb",
+            "modified": "2026-03-01T12:00:00Z",
+            "mode": "0644"
+          },
+          {
+            "name": "site/photo.jpg",
+            "blobId": "Bcccc",
+            "modified": "2026-02-15T09:30:00Z",
+            "mode": "0644"
+          }
+        ]
+      }
+    },
+    "t2": {
+      "compress": {
+        "blobId": "#t1",
+        "type": "application/gzip"
+      }
+    }
+  }
+}, "0"]]
+~~~
+
+Because "t1" was created with `noPersist`, the server may omit it
+from the response:
+
+~~~json
+[["Blob/convert", {
+  "accountId": "abc",
+  "created": {
+    "t2": {
+      "id": "Bd81c7f",
+      "type": "application/gzip",
+      "size": 98304
+    }
+  },
+  "notCreated": {}
+}, "0"]]
+~~~
+
+## Extracting a Compressed Tar Archive
+
+This example decompresses and extracts a .tar.gz file to discover
+its contents.  The intermediate decompressed tar blob uses
+`noPersist`:
+
+~~~json
+[["Blob/convert", {
+  "accountId": "abc",
+  "create": {
+    "u1": {
+      "noPersist": true,
+      "unCompress": {
+        "blobId": "Bd81c7f",
+        "type": "application/gzip"
+      }
+    },
+    "u2": {
+      "unArchive": {
+        "blobId": "#u1",
+        "type": "application/x-tar"
+      }
+    }
+  }
+}, "0"]]
+~~~
+
+The response for the UnArchiveRecipe includes the standard creation
+response properties plus an `entries` array listing the archive
+contents, with a blobId for each file entry:
+
+~~~json
+[["Blob/convert", {
+  "accountId": "abc",
+  "created": {
+    "u2": {
+      "id": "Be3a901",
+      "type": "application/x-tar",
+      "size": 102400,
+      "entries": [
+        {
+          "name": "site/index.html",
+          "blobId": "Bdd001",
+          "entryType": "file",
+          "modified": "2026-03-01T12:00:00Z",
+          "mode": "0644"
+        },
+        {
+          "name": "site/style.css",
+          "blobId": "Bdd002",
+          "entryType": "file",
+          "modified": "2026-03-01T12:00:00Z",
+          "mode": "0644"
+        },
+        {
+          "name": "site/photo.jpg",
+          "blobId": "Bdd003",
+          "entryType": "file",
+          "modified": "2026-02-15T09:30:00Z",
+          "mode": "0644"
+        }
+      ]
+    }
+  },
+  "notCreated": {}
+}, "0"]]
+~~~
+
+The returned blobIds ("Bdd001", "Bdd002", "Bdd003") can be used
+to download individual files or as inputs to further Blob/convert
+operations.
+
 # Security Considerations
 
 All security considerations from {{JMAP-CORE}} and {{JMAP-BLOB}} apply
@@ -629,22 +815,12 @@ EDITOR: please remove this section before publication.
 
 The source of this document exists on github at: https://github.com/brong/draft-gondwana-jmap-blobext/
 
-**draft-gondwana-jmap-blobext-03**
-
-* Removed encryption and decryption recipes and related security
-  considerations; these will be specified separately.
-
-**draft-gondwana-jmap-blobext-02**
-
-* Added noPersist option to Blob/upload and Blob/convert for ephemeral
-  intermediate blobs in pipelines.
-* Standardised Blob/convert response to use `id` with `type`, `size`,
-  and optional `expires`, matching Blob/upload.
-
 **draft-gondwana-jmap-blobext-01**
 
 * Added Blob/convert method with recipes for image conversion, archiving,
-  compression, encryption, and rdiff.
+  compression, and rdiff.
+* Added noPersist option to Blob/upload and Blob/convert for ephemeral
+  intermediate blobs in pipelines.
 * Removed rdiffSignature and rdiffPatch from Blob/get and DataSourceObject.
 * Fleshed out capability object with supported type lists.
 * Added capability and method examples.
