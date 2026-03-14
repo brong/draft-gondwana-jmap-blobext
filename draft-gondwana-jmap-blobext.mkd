@@ -113,7 +113,7 @@ on server capabilities and permissions for that account:
 * supportedCompressionTypes: "String[]"
 
     The compression MIME types supported for CompressRecipe and
-    UncompressRecipe.  Defined values are "application/gzip",
+    UnCompressRecipe.  Defined values are "application/gzip",
     "application/x-bzip2", "application/x-xz", and "application/zstd".
 
 * supportsRdiff: "Boolean"
@@ -286,7 +286,7 @@ following properties, which determines the type of conversion:
 
 * compress: CompressRecipe
 
-* unCompress: UncompressRecipe
+* unCompress: UnCompressRecipe
 
 * rdiff: RdiffRecipe
 
@@ -587,9 +587,9 @@ Compression level ranges from 1 (fastest) to 22 (best compression).
 The default is typically 3.  If `checksum` is true, an xxHash-64
 checksum is included in the frame; the default is false.
 
-### UncompressRecipe
+### UnCompressRecipe
 
-An UncompressRecipe decompresses a compressed blob.  It is an object
+An UnCompressRecipe decompresses a compressed blob.  It is an object
 with the following properties:
 
 * blobId: "BlobId"
