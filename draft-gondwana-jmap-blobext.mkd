@@ -4,7 +4,7 @@ abbrev: JMAP Blob Extended
 docname: draft-gondwana-jmap-blobext-01
 submissionType: IETF
 category: std
-updates: 8620
+updates: 8620, 9404
 obsoletes:
 ipr: trust200902
 keyword: Internet-Draft
@@ -46,7 +46,7 @@ and decompression, and binary delta (rdiff) operations.
 
 # Introduction
 
-The JMAP Blob extension ({{JMAP-BLOB}} — JSON Blob Management) offers additional
+The JMAP Blob extension ({{JMAP-BLOB}} — JMAP Blob Management) offers additional
 ways to create blobs, and query where they are used.
 
 This extension builds on that work, offering ways to find more information about
@@ -70,9 +70,12 @@ This document defines an additional capability URI.
 
 The capability `urn:ietf:params:jmap:blobext` being present in the
 "accountCapabilities" property of an account represents support for
-these extended properties on that account.  If this capability is
-present in one or more "accountCapabilities" properties then the
-server MUST also include the key in the "capabilities" property.
+these extended properties on that account.  This capability depends
+on `urn:ietf:params:jmap:blob` ({{JMAP-BLOB}}); both MUST be present
+in the account's "accountCapabilities" and in the request's `using`
+array.  If this capability is present in one or more
+"accountCapabilities" properties then the server MUST also include
+the key in the "capabilities" property.
 
 The value of this property in the JMAP session "capabilities"
 property MUST be an empty object.
@@ -88,11 +91,11 @@ on server capabilities and permissions for that account:
 
 * chunkSize: "UnsignedInt\|null"
 
-    The size in octets which the server users to split large files
+    The size in octets which the server uses to split large files
     into chunks.  If a client uploads blobs with exactly this size
-    except for the final chunk, and uses Blob/upload with data
-    blobs containing these chunks, it is expected that the server
-    can optimise these chunks.  Servers MUST allow other sizes
+    except for the final chunk, and uses Blob/upload with
+    DataSourceObjects referencing these chunks, it is expected that
+    the server can optimise these chunks.  Servers MUST allow other sizes
     for the individual data blocks in Blob/upload though, and will
     then choose whether to store them as an array of blobs still,
     or to combine them.
@@ -112,6 +115,36 @@ on server capabilities and permissions for that account:
     The compression MIME types supported for CompressRecipe and
     UncompressRecipe.  Defined values are "application/gzip",
     "application/x-bzip2", "application/x-xz", and "application/zstd".
+
+* supportsRdiff: "Boolean"
+
+    Whether the server supports RdiffRecipe operations.  If false,
+    the server will reject RdiffRecipe requests with an
+    "invalidProperties" SetError.
+
+* maxConvertSize: "UnsignedInt\|null"
+
+    If supplied, the maximum size in octets of any single input
+    blob to a Blob/convert operation.  Requests referencing a blob
+    larger than this value MUST be rejected with a "tooLarge"
+    SetError.  If null, the server does not advertise a specific
+    limit but MAY still reject blobs that are too large.
+
+* maxArchiveEntries: "UnsignedInt\|null"
+
+    If supplied, the maximum number of entries allowed in an
+    ArchiveRecipe.  Requests exceeding this limit MUST be rejected
+    with a "tooLarge" SetError.  If null, the server does not
+    advertise a specific limit but MAY still reject requests with
+    too many entries.
+
+* maxImageDimension: "UnsignedInt\|null"
+
+    If supplied, the maximum value accepted for `width` or `height`
+    in an ImageConvertRecipe, in pixels.  Requests exceeding this
+    limit MUST be rejected with a "tooLarge" SetError.  If null,
+    the server does not advertise a specific limit but MAY still
+    reject requests with dimensions that are too large.
 
 ### Capability Example
 
@@ -133,7 +166,11 @@ on server capabilities and permissions for that account:
       "application/gzip",
       "application/x-bzip2",
       "application/zstd"
-    ]
+    ],
+    "supportsRdiff": true,
+    "maxConvertSize": 104857600,
+    "maxArchiveEntries": 10000,
+    "maxImageDimension": 8192
   }
 }
 ~~~
@@ -144,10 +181,11 @@ When this capability is present, Blob/get accepts an additional
 request argument:
 
 * dataSourceProperties: "String[]" (default: \["blobId", "size"\])
-  Specifies which properties to return on each DataSourceObject in
-  the `chunks` array.  The default is `["blobId", "size"]`.  Clients
-  may request additional properties such as `offset`, `length`,
-  `position`, or `digest:*` values (e.g. `digest:sha-256`).
+  If supplied, only the properties listed in the array are returned
+  for each DataSourceObject in the `chunks` array.  If omitted, the
+  default of `["blobId", "size"]` is used.  Available properties
+  include `blobId`, `size`, `offset`, `length`, `position`, and
+  `digest:*` values (e.g. `digest:sha-256`).
 
 Blob/get also returns an additional response property (returned by
 default when this capability is included in `using`):
@@ -155,20 +193,24 @@ default when this capability is included in `using`):
 * chunks: "DataSourceObject[]"
 
     An array of one or more data source objects (as defined in {{JMAP-BLOB}},
-    Section 4.2).  The file is created by concatenating the data source
-    objects in the listed order.  While it is expected that each data source
-    object will include the entire blob via offset and length, it is legal
-    for the server to give offset and length values which do not cover the
-    entire blob in the same way that Blob/upload can, and the client MUST
-    use the length and offset to figure out what to append to the resulting
-    file.
+    Section 4.2).  The blob is reconstructed by concatenating the data
+    from each data source object in the listed order.  While it is
+    expected that each data source object will reference the entire
+    underlying chunk blob, the server MAY return offset and length values
+    that select only a portion of a chunk's blob.  The client MUST use
+    the offset and length to determine which octets to read from each
+    chunk.
 
 ## Additions to DataSourceObject
 
 When this capability is present, the DataSourceObject (as defined in
-{{JMAP-BLOB}}, Section 4.2) is extended with the following properties.
-These apply both to the `chunks` returned by Blob/get and to
-DataSourceObjects used in Blob/upload.
+{{JMAP-BLOB}}, Section 4.2) is extended with the following additional
+properties.  These apply both to the `chunks` returned by Blob/get
+and to DataSourceObjects used in Blob/upload.  The `offset` and
+`length` properties are already defined in {{JMAP-BLOB}}; they are
+listed here to document their use in the `chunks` response context,
+where they describe the range of each chunk's underlying data source
+that contributes to the containing blob.
 
 * offset: "UnsignedInt\|null"
   The offset within the data source from which to start copying
@@ -215,6 +257,10 @@ gains the following additional request property:
 
 ## New method Blob/convert
 
+Blob/convert is defined under the `urn:ietf:params:jmap:blobext`
+capability and requires that capability in the request's `using`
+array.
+
 Blob/convert performs server-side transformations on blobs.  Like
 Blob/upload ({{JMAP-BLOB}}, Section 4), it takes an `accountId` and a
 `create` argument that maps creation ids to conversion request objects.
@@ -254,6 +300,12 @@ Section 6.1.  Creation id backreferences (using the `#` prefix)
 resolve to this `id` and may be used in subsequent conversions within
 the same Blob/convert call or in later method calls within the same
 JMAP request.
+
+The server MUST resolve the order of dependencies between entries
+in the `create` map and process them in an order such that all
+backreferences are satisfied.  If a dependency cycle is detected,
+all members of the cycle MUST be rejected with an
+"invalidProperties" error.
 
 ### ImageConvertRecipe
 
@@ -305,9 +357,11 @@ or size.  It is an object with the following properties:
 
 Errors:
 
-* "blobNotFound" — the referenced blobId does not exist.
-* "invalidArguments" — the type is not in `supportedImageTypes`, or
+* "notFound" — the referenced blobId does not exist.
+* "invalidProperties" — the type is not in `supportedImageTypes`, or
   the source blob is not a supported image format.
+* "tooLarge" — the source blob exceeds `maxConvertSize`, or the
+  requested dimensions exceed `maxImageDimension`.
 
 ### ArchiveRecipe
 
@@ -324,10 +378,12 @@ It is an object with the following properties:
 
 Errors:
 
-* "blobNotFound" — a referenced entry blobId does not exist.
-* "invalidArguments" — the type is not in `supportedArchiveTypes`;
+* "notFound" — a referenced entry blobId does not exist.
+* "invalidProperties" — the type is not in `supportedArchiveTypes`;
   an entry has an unsupported entryType for the archive format; or
   a required field (e.g. linkTarget for symlink entries) is missing.
+* "tooLarge" — the number of entries exceeds `maxArchiveEntries`,
+  or a referenced blob exceeds `maxConvertSize`.
 
 #### ArchiveEntry
 
@@ -340,15 +396,16 @@ results).  It is an object with the following properties:
   have a name ending with "/".
 * blobId: "BlobId\|null"
   The blobId of the content for this entry.  MUST be non-null for
-  file entries.  MUST be null for directory, symlink, hardlink, fifo,
-  and device entries.
+  file entries.  MUST be null or absent for directory, symlink,
+  hardlink, fifo, and device entries.  Violating these constraints
+  is an "invalidProperties" error.
 * entryType: "String\|null"
   The type of the entry.  If null, defaults to "file".  Defined values
   are "file" (a regular file, the default), "directory", "symlink"
   (a symbolic link), "hardlink" (a hard link), "fifo" (a named pipe),
   "blockDevice" (a block device node), and "charDevice" (a character
   device node).  The server MUST reject entries with unsupported
-  types for the chosen archive format with an "invalidArguments"
+  types for the chosen archive format with an "invalidProperties"
   error.
 * modified: "UTCDate\|null"
   The modification time of the entry as an RFC 3339 timestamp.
@@ -470,10 +527,11 @@ successful UnArchiveRecipe result includes:
 
 Errors:
 
-* "blobNotFound" — the referenced blobId does not exist.
+* "notFound" — the referenced blobId does not exist.
 * "unknownFormat" — the server could not determine or does not support
   the archive format.
-* "invalidArguments" — the type is not in `supportedArchiveTypes`.
+* "invalidProperties" — the type is not in `supportedArchiveTypes`.
+* "tooLarge" — the source blob exceeds `maxConvertSize`.
 
 ### CompressRecipe
 
@@ -490,16 +548,18 @@ algorithm.  It is an object with the following properties:
 * level: "UnsignedInt\|null"
   The compression level, where higher values produce smaller output
   at the cost of more CPU time.  If null, the server uses the
-  format's default level.  The valid range depends on the format.
-  Servers MUST clamp out-of-range values to the nearest valid value.
+  format's default level.  The valid range depends on the format;
+  if the requested level is outside the valid range, the server
+  SHOULD use the nearest valid value.
 * checksum: "Boolean\|null"
   If true, include an integrity checksum in the compressed output.
   If null, the server uses the format's default behaviour.
 
 Errors:
 
-* "blobNotFound" — the referenced blobId does not exist.
-* "invalidArguments" — the type is not in `supportedCompressionTypes`.
+* "notFound" — the referenced blobId does not exist.
+* "invalidProperties" — the type is not in `supportedCompressionTypes`.
+* "tooLarge" — the source blob exceeds `maxConvertSize`.
 
 #### Considerations for application/gzip
 
@@ -541,9 +601,11 @@ with the following properties:
 
 Errors:
 
-* "blobNotFound" — the referenced blobId does not exist.
+* "notFound" — the referenced blobId does not exist.
 * "unknownFormat" — the server could not determine or does not support
   the compression format.
+* "invalidProperties" — the type is not in `supportedCompressionTypes`.
+* "tooLarge" — the source blob exceeds `maxConvertSize`.
 
 ### RdiffRecipe
 
@@ -584,13 +646,65 @@ it is the delta.  For "patch", it is the patched file.
 
 Errors:
 
-* "blobNotFound" — a referenced blobId does not exist.
-* "invalidArguments" — the action is not one of the defined values;
+* "notFound" — a referenced blobId does not exist.
+* "invalidProperties" — the action is not one of the defined values;
   a required blobId (deltaBlobId or newFileBlobId) is missing for the
   given action; or a blobId was provided for a field that should be
   null for the given action.
+* "tooLarge" — a referenced blob exceeds `maxConvertSize`.
 
 # Examples
+
+## Querying Blob Chunks
+
+This example fetches a blob's chunk structure with offsets, sizes,
+and SHA-256 digests:
+
+~~~json
+[["Blob/get", {
+  "accountId": "abc",
+  "ids": ["B1a2b3c"],
+  "dataSourceProperties": [
+    "blobId", "size", "offset", "length", "position",
+    "digest:sha-256"
+  ]
+}, "0"]]
+~~~
+
+The response shows the blob is stored as two chunks:
+
+~~~json
+[["Blob/get", {
+  "accountId": "abc",
+  "list": [{
+    "id": "B1a2b3c",
+    "size": 10485760,
+    "chunks": [
+      {
+        "blobId": "Bchunk1",
+        "size": 5242880,
+        "offset": 0,
+        "length": 5242880,
+        "position": 0,
+        "digest:sha-256": "a1b2c3..."
+      },
+      {
+        "blobId": "Bchunk2",
+        "size": 5242880,
+        "offset": 0,
+        "length": 5242880,
+        "position": 5242880,
+        "digest:sha-256": "d4e5f6..."
+      }
+    ]
+  }],
+  "notFound": []
+}, "0"]]
+~~~
+
+The `position` values show where each chunk fits in the assembled
+blob, and the `digest:sha-256` values can be used to verify chunk
+integrity.
 
 ## Creating a Zip Archive
 
@@ -791,11 +905,20 @@ memory.  Servers SHOULD impose reasonable limits on archive size,
 number of entries, nesting depth of archives within archives,
 compression ratios (to mitigate zip bomb attacks), and total
 processing time.  Servers SHOULD reject requests that would exceed
-these limits with a "serverFail" error.
+these limits with a "tooLarge" or "serverFail" error as appropriate.
+
+Image conversion can also consume significant resources, especially
+for very large images or high output dimensions.
 
 The rdiff operations can also be resource-intensive, particularly
 for large blobs.  Servers SHOULD impose limits on the size of blobs
 that can be used as inputs to rdiff operations.
+
+Servers SHOULD advertise their limits via the `maxConvertSize`,
+`maxArchiveEntries`, and `maxImageDimension` capability properties
+so that clients can avoid making requests that will be rejected.
+Even when these properties are not advertised, servers SHOULD set
+sensible internal limits and reject requests that exceed them.
 
 ## Archive Path Traversal
 
@@ -870,6 +993,11 @@ The source of this document exists on github at: https://github.com/brong/draft-
 * Added capability and method examples.
 * Expanded Security Considerations.
 * Updated IANA registrations with error codes and corrected capability URI.
+* Added limit capability properties: maxConvertSize, maxArchiveEntries,
+  maxImageDimension, and supportsRdiff.
+* Added dependency resolution requirement for Blob/convert create map
+  with cycle detection.
+* Now updates both RFC 8620 and RFC 9404.
 
 **draft-gondwana-jmap-blobext-00**
 
