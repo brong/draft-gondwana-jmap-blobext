@@ -91,14 +91,14 @@ on server capabilities and permissions for that account:
 
 * chunkSize: "UnsignedInt\|null"
 
-    The size in octets which the server uses to split large files
-    into chunks.  If a client uploads blobs with exactly this size
-    except for the final chunk, and uses Blob/upload with
-    DataSourceObjects referencing these chunks, it is expected that
-    the server can optimise these chunks.  Servers MUST allow other sizes
-    for the individual data blocks in Blob/upload though, and will
-    then choose whether to store them as an array of blobs still,
-    or to combine them.
+    A hint indicating the preferred chunk size in octets.  If a
+    client uploads blobs with exactly this size except for the
+    final chunk, and uses Blob/upload with DataSourceObjects
+    referencing these chunks, the server can optimise storage of
+    these chunks.  Servers MUST allow other sizes for the
+    individual data blocks in Blob/upload though, and will then
+    choose whether to store them as an array of blobs still, or
+    to combine them.
 
 * supportedImageTypes: "String[]"
 
@@ -259,6 +259,27 @@ gains the following additional request property:
   This allows servers to optimise pipelines where intermediate blobs
   are never needed after the request completes.
 
+## The "expires" response property
+
+When this capability is present, the following blob creation
+responses MAY include an additional property: the
+resumableUploadUrl response, the Blob/upload response
+({{JMAP-BLOB}}, Section 4), and the Blob/convert response defined
+below.
+
+* expires: "UTCDate\|null"
+  A hint from the server indicating the likely availability of
+  the blob.  The blob is likely to remain available until this
+  time, and likely not to be available after it.  This is not a
+  guarantee in either direction: the server MAY garbage collect
+  the blob before this time if it is unreferenced, and MAY
+  retain it longer.  If null or absent, the server provides no
+  hint about the blob's lifetime.
+
+Clients that need the blob to persist beyond the `expires` time
+should reference it from a persistent object (e.g., a FileNode
+or an Email) before it expires.
+
 ## New method Blob/convert
 
 Blob/convert is defined under the `urn:ietf:params:jmap:blobext`
@@ -301,11 +322,27 @@ Section 4): a `created` map of creation id to an object containing
 `id`, `type`, and `size` for each successful conversion, and a
 `notCreated` map of creation id to a SetError object for each failed
 conversion.  The `id` is the blobId of the created blob.  The server
-MAY also return an `expires` property as described in {{JMAP-CORE}},
-Section 6.1.  Creation id backreferences (using the `#` prefix)
+MAY also return an `expires` property (see "The expires response
+property" above).  Creation id backreferences (using the `#` prefix)
 resolve to this `id` and may be used in subsequent conversions within
 the same Blob/convert call or in later method calls within the same
 JMAP request.
+
+A server MAY return a blobId for a conversion result without
+immediately generating the output data.  In this case the server
+MUST generate the data when the blob is later accessed (e.g., via
+a download request or as input to another operation).  This allows
+the server to respond quickly to Blob/convert requests while
+deferring expensive work such as image resizing or archive
+creation.  The returned blobId MUST be usable in all contexts
+where a regular blobId is accepted.  If the deferred generation
+later fails (e.g., the source blob has expired), the server
+SHOULD return an appropriate HTTP error when the blob is
+downloaded.  If the exact size of the output is not yet known, the
+server MUST omit the `size` property from the response for that
+creation.  If a client later requests the `size` property via
+Blob/get for a deferred blob, the server MUST generate the blob
+at that point and return the actual size.
 
 The server MUST resolve the order of dependencies between entries
 in the `create` map and process them in an order such that all
@@ -1009,6 +1046,9 @@ The source of this document exists on github at: https://github.com/brong/draft-
 * Replaced RdiffRecipe with generic DeltaRecipe and PatchRecipe using
   media types (rdiff, bsdiff, unified diff).
 * Replaced supportsRdiff with supportedPatchTypes capability.
+* Clarified chunkSize as a hint, not a definitive statement.
+* Added lazy generation text for Blob/convert (deferred output).
+* Defined "expires" response property for blob creation responses.
 
 **draft-gondwana-jmap-blobext-01**
 
