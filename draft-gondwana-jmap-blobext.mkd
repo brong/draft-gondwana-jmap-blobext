@@ -1,7 +1,7 @@
 ---
 title: JMAP Blob Extensions
 abbrev: JMAP Blob Extended
-docname: draft-gondwana-jmap-blobext-01
+docname: draft-gondwana-jmap-blobext-02
 submissionType: IETF
 category: std
 updates: 8620, 9404
@@ -40,7 +40,7 @@ This extension adds more methods to work with blobs, including handling large
 blobs by processing them in chunks (building on RFC9404's blob construction
 support), and providing server-side blob conversion operations: image format
 conversion, archive creation and extraction (zip, tar, cpio), compression
-and decompression, and binary delta (rdiff) operations.
+and decompression, and delta/patch operations.
 
 --- middle
 
@@ -53,7 +53,7 @@ This extension builds on that work, offering ways to find more information about
 the internal structure of the server's blob store in order to work efficiently
 with it, and a new Blob/convert method for server-side blob transformations
 including image format conversion, archive creation and extraction, compression
-and decompression, and binary delta (rdiff) operations.
+and decompression, and delta/patch operations.
 
 ## Conventions Used in This Document
 
@@ -116,11 +116,12 @@ on server capabilities and permissions for that account:
     UnCompressRecipe.  Defined values are "application/gzip",
     "application/x-bzip2", "application/x-xz", and "application/zstd".
 
-* supportsRdiff: "Boolean"
+* supportedPatchTypes: "String[]"
 
-    Whether the server supports RdiffRecipe operations.  If false,
-    the server will reject RdiffRecipe requests with an
-    "invalidProperties" SetError.
+    The delta/patch media types supported for DeltaRecipe and
+    PatchRecipe.  Defined values are "application/x-rdiff-delta",
+    "application/x-bsdiff", and "text/x-diff" (unified diff).
+    An empty array means no delta/patch operations are supported.
 
 * maxConvertSize: "UnsignedInt\|null"
 
@@ -167,7 +168,10 @@ on server capabilities and permissions for that account:
       "application/x-bzip2",
       "application/zstd"
     ],
-    "supportsRdiff": true,
+    "supportedPatchTypes": [
+      "application/x-rdiff-delta",
+      "text/x-diff"
+    ],
     "maxConvertSize": 104857600,
     "maxArchiveEntries": 10000,
     "maxImageDimension": 8192
@@ -288,7 +292,9 @@ following properties, which determines the type of conversion:
 
 * unCompress: UnCompressRecipe
 
-* rdiff: RdiffRecipe
+* delta: DeltaRecipe
+
+* patch: PatchRecipe
 
 The response has the same structure as Blob/upload ({{JMAP-BLOB}},
 Section 4): a `created` map of creation id to an object containing
@@ -607,50 +613,66 @@ Errors:
 * "invalidProperties" — the type is not in `supportedCompressionTypes`.
 * "tooLarge" — the source blob exceeds `maxConvertSize`.
 
-### RdiffRecipe
+### DeltaRecipe
 
-An RdiffRecipe performs rdiff operations for efficient binary delta
-transfer.  It supports three actions: computing a signature, generating
-a delta, and applying a patch.  It is an object with the following
-properties:
+A DeltaRecipe computes a delta between two blobs.  It is an object
+with the following properties:
 
-* action: "String"
-  The rdiff operation to perform.  MUST be one of "signature" (compute
-  a signature of the source blob), "delta" (compute a delta between a
-  signature and a new file), or "patch" (apply a delta to a source blob).
-* sourceBlobId: "BlobId"
-  The source blob.  For "signature", this is the file to compute
-  the signature of.  For "delta", this is the signature blob.  For
-  "patch", this is the basis file to apply the delta to.
-* deltaBlobId: "BlobId\|null"
-  The delta blob to apply.  MUST be non-null when action is "patch".
-  MUST be null otherwise.
-* newFileBlobId: "BlobId\|null"
-  The new file to compute a delta against.  MUST be non-null when
-  action is "delta".  MUST be null otherwise.
-* blockSize: "UnsignedInt\|null"
-  The signature block size in bytes.  Only meaningful when action is
-  "signature".  Smaller blocks produce more precise deltas but larger
-  signature files.  If null, the server selects a default based on
-  the source file size.
-* strongHashAlgorithm: "String\|null"
-  The hash algorithm used for strong checksums in the signature.
-  Only meaningful when action is "signature".  Defined values are
-  "blake2" and "md4".  If null, the server selects a sensible default
-  (typically "blake2").  Note that "md4" is provided only for
-  compatibility with older rdiff implementations; new signatures
-  SHOULD use "blake2".
+* blobId: "BlobId"
+  The blobId of the original (base) blob.
+* newBlobId: "BlobId"
+  The blobId of the new blob to compare against.
+* type: "String"
+  The media type of the delta format to produce.  MUST be one of the
+  values in the server's `supportedPatchTypes` capability.
 
-For "signature", the result blob is the signature.  For "delta",
-it is the delta.  For "patch", it is the patched file.
+The result blob is the computed delta, which can be applied to the
+base blob using PatchRecipe to reconstruct the new blob.
 
 Errors:
 
 * "notFound" — a referenced blobId does not exist.
-* "invalidProperties" — the action is not one of the defined values;
-  a required blobId (deltaBlobId or newFileBlobId) is missing for the
-  given action; or a blobId was provided for a field that should be
-  null for the given action.
+* "invalidProperties" — the type is not in `supportedPatchTypes`.
+* "tooLarge" — a referenced blob exceeds `maxConvertSize`.
+
+#### Considerations for application/x-rdiff-delta
+
+The server computes an rdiff signature of the base blob and then
+generates a delta against the new blob.  The resulting delta blob
+can only be applied to the exact base blob used to generate it.
+
+#### Considerations for application/x-bsdiff
+
+The server produces a bsdiff-format patch.  Both blobs must fit in
+memory; servers MAY reject very large blobs with a "tooLarge" error.
+
+#### Considerations for text/x-diff
+
+The server produces a unified diff.  Both blobs are interpreted as
+text.  If either blob contains content that cannot be interpreted as
+text, the server MUST return an "unknownFormat" error.
+
+### PatchRecipe
+
+A PatchRecipe applies a delta to a base blob to produce a new blob.
+It is an object with the following properties:
+
+* blobId: "BlobId"
+  The blobId of the base blob to patch.
+* deltaBlobId: "BlobId"
+  The blobId of the delta to apply.
+* deltaType: "String"
+  The media type of the delta format.  MUST be one of the values in
+  the server's `supportedPatchTypes` capability.
+
+The result blob is the patched output.
+
+Errors:
+
+* "notFound" — a referenced blobId does not exist.
+* "invalidProperties" — the deltaType is not in `supportedPatchTypes`.
+* "unknownFormat" — the delta blob is not valid for the specified
+  format (e.g., corrupt or malformed delta data).
 * "tooLarge" — a referenced blob exceeds `maxConvertSize`.
 
 # Examples
@@ -910,9 +932,9 @@ these limits with a "tooLarge" or "serverFail" error as appropriate.
 Image conversion can also consume significant resources, especially
 for very large images or high output dimensions.
 
-The rdiff operations can also be resource-intensive, particularly
-for large blobs.  Servers SHOULD impose limits on the size of blobs
-that can be used as inputs to rdiff operations.
+Delta and patch operations can also be resource-intensive,
+particularly for large blobs.  Servers SHOULD impose limits on the
+size of blobs that can be used as inputs to these operations.
 
 Servers SHOULD advertise their limits via the `maxConvertSize`,
 `maxArchiveEntries`, and `maxImageDimension` capability properties
@@ -935,7 +957,7 @@ with ".." path components.
 ## Content Smuggling
 
 The ability to split content into multiple blobs, recombine them via
-Blob/upload, and apply rdiff patches may be used to bypass security
+Blob/upload, and apply delta patches may be used to bypass security
 scanners that inspect blob content.  Servers that perform content
 scanning SHOULD scan the output of Blob/convert operations as well
 as the inputs.
@@ -981,6 +1003,12 @@ Reference: this document
 EDITOR: please remove this section before publication.
 
 The source of this document exists on github at: https://github.com/brong/draft-gondwana-jmap-blobext/
+
+**draft-gondwana-jmap-blobext-02**
+
+* Replaced RdiffRecipe with generic DeltaRecipe and PatchRecipe using
+  media types (rdiff, bsdiff, unified diff).
+* Replaced supportsRdiff with supportedPatchTypes capability.
 
 **draft-gondwana-jmap-blobext-01**
 
