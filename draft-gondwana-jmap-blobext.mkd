@@ -949,6 +949,76 @@ The returned blobIds ("Bdd001", "Bdd002", "Bdd003") can be used
 to download individual files or as inputs to further Blob/convert
 operations.
 
+## Computing and Applying a Delta
+
+This example computes a unified diff between two versions of a
+text file:
+
+~~~json
+[["Blob/convert", {
+  "accountId": "abc",
+  "create": {
+    "d1": {
+      "delta": {
+        "blobId": "BoldVersion",
+        "newBlobId": "BnewVersion",
+        "type": "text/x-diff"
+      }
+    }
+  }
+}, "0"]]
+~~~
+
+The response contains the delta blob:
+
+~~~json
+[["Blob/convert", {
+  "accountId": "abc",
+  "created": {
+    "d1": {
+      "id": "Bdelta789",
+      "type": "text/x-diff",
+      "size": 1234
+    }
+  },
+  "notCreated": {}
+}, "0"]]
+~~~
+
+The delta can later be applied to the original blob to reconstruct
+the new version:
+
+~~~json
+[["Blob/convert", {
+  "accountId": "abc",
+  "create": {
+    "p1": {
+      "patch": {
+        "blobId": "BoldVersion",
+        "deltaBlobId": "Bdelta789",
+        "deltaType": "text/x-diff"
+      }
+    }
+  }
+}, "0"]]
+~~~
+
+The result is a blob identical to "BnewVersion":
+
+~~~json
+[["Blob/convert", {
+  "accountId": "abc",
+  "created": {
+    "p1": {
+      "id": "Breconstructed",
+      "type": "application/octet-stream",
+      "size": 48576
+    }
+  },
+  "notCreated": {}
+}, "0"]]
+~~~
+
 # Security Considerations
 
 All security considerations from {{JMAP-CORE}} and {{JMAP-BLOB}} apply
