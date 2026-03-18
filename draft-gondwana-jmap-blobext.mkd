@@ -1,7 +1,7 @@
 ---
 title: JMAP Blob Extensions
 abbrev: JMAP Blob Extended
-docname: draft-gondwana-jmap-blobext-02
+docname: draft-gondwana-jmap-blobext-03
 submissionType: IETF
 category: std
 updates: 8620, 9404
@@ -258,6 +258,27 @@ gains the following additional request property:
   final Response object if it did not create a referenceable blob.
   This allows servers to optimise pipelines where intermediate blobs
   are never needed after the request completes.
+
+When this capability is present, Blob/upload also gains the
+following additional request properties:
+
+* update: "Id\[Object\]" (default: null)
+  A map of blobId to an empty object.  No properties may be
+  set on a blob; the purpose of update is to "touch" the blob,
+  refreshing its lifetime on the server.  The response includes
+  an `updated` map of blobId to an object which MAY contain an
+  `expires` property with the new expiry time.  If the blobId
+  does not exist, it MUST be reported in a `notUpdated` map
+  with a `notFound` SetError.
+
+* destroy: "Id[]" (default: null)
+  An array of blobIds to destroy.  The server MUST reject
+  any blob that is still referenced by another object with a
+  `blobHasReference` SetError.  If the blobId does not exist, the
+  server MUST return a `notFound` SetError.  Successfully
+  destroyed blobIds are returned in a `destroyed` array.
+  Failed destroys are returned in a `notDestroyed` map of
+  blobId to SetError.
 
 ## The "expires" response property
 
@@ -1105,11 +1126,30 @@ the blob content does not match the specified format.
 
 Reference: this document
 
+### blobHasReference
+
+JMAP Error Code: blobHasReference
+
+Intended use: common
+
+Change Controller: IETF
+
+Description: The blob cannot be destroyed because it is still
+referenced by one or more objects.  The client can use Blob/lookup
+({{JMAP-BLOB}}, Section 5) to discover which objects reference
+the blob.
+
+Reference: this document
+
 # Changes
 
 EDITOR: please remove this section before publication.
 
 The source of this document exists on github at: https://github.com/brong/draft-gondwana-jmap-blobext/
+
+**draft-gondwana-jmap-blobext-03**
+
+* Added update (touch) and destroy operations to Blob/upload.
 
 **draft-gondwana-jmap-blobext-02**
 
