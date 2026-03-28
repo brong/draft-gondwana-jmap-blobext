@@ -1,7 +1,7 @@
 ---
 title: JMAP Blob Extensions
 abbrev: JMAP Blob Extended
-docname: draft-gondwana-jmap-blobext-03
+docname: draft-gondwana-jmap-blobext-04
 submissionType: IETF
 category: std
 updates: 8620, 9404
@@ -246,18 +246,19 @@ provided value does not match the actual data.
 
 ## Additions to Blob/upload
 
-When this capability is present, Blob/upload ({{JMAP-BLOB}}, Section 4)
-gains the following additional request property:
+When this capability is present, each object in the Blob/upload
+({{JMAP-BLOB}}, Section 4) `create` map MAY include the following
+additional property:
 
 * noPersist: "Boolean" (default: false)
-  If true, blobs created by this call are ephemeral: they may be
-  referenced via creation id backreferences within the same JMAP
-  request, but the server is not required to persist them beyond the
-  lifetime of the request.  The server MAY omit ephemeral blobs from
-  the `created` map of the response and from the `createdIds` of the
-  final Response object if it did not create a referenceable blob.
-  This allows servers to optimise pipelines where intermediate blobs
-  are never needed after the request completes.
+  If true, the resulting blob is ephemeral: it may be referenced via
+  creation id backreferences within the same JMAP request, but the
+  server is not required to persist it beyond the lifetime of the
+  request.  The server MAY omit ephemeral blobs from the `created`
+  map of the response and from the `createdIds` of the final Response
+  object if it did not create a referenceable blob.  This allows
+  servers to optimise pipelines where intermediate blobs are never
+  needed after the request completes.
 
 When this capability is present, Blob/upload also gains the
 following additional request properties:
@@ -1146,6 +1147,11 @@ Reference: this document
 EDITOR: please remove this section before publication.
 
 The source of this document exists on github at: https://github.com/brong/draft-gondwana-jmap-blobext/
+
+**draft-gondwana-jmap-blobext-04**
+
+* Moved noPersist from top-level Blob/upload property to per-item
+  in the create map, for consistency with Blob/convert.
 
 **draft-gondwana-jmap-blobext-03**
 
