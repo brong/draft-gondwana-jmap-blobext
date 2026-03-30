@@ -1,7 +1,7 @@
 ---
 title: JMAP Blob Extensions
 abbrev: JMAP Blob Extended
-docname: draft-gondwana-jmap-blobext-04
+docname: draft-gondwana-jmap-blobext-05
 submissionType: IETF
 category: std
 updates: 8620, 9404
@@ -204,6 +204,41 @@ default when this capability is included in `using`):
     that select only a portion of a chunk's blob.  The client MUST use
     the offset and length to determine which octets to read from each
     chunk.
+
+Blob/get also accepts the following additional property in
+the `properties` array:
+
+* imageData: "ImageData\|null" (server-set)
+
+    If the blob is an image or video type and the server can
+    extract metadata, this is an ImageData object.  Otherwise
+    null.  Only returned if explicitly requested in
+    `properties`.  The server MAY need to read the blob content
+    to compute this data, so clients SHOULD only request it
+    when needed.  Since blobs are immutable, the result for a
+    given blobId will never change, and the server SHOULD cache
+    it.
+
+    An ImageData object has the following properties:
+
+    * width: "UnsignedInt\|null"
+      Width of the image in pixels, if known.
+    * height: "UnsignedInt\|null"
+      Height of the image in pixels, if known.
+    * orientation: "UnsignedInt\|null"
+      EXIF orientation value (1-8), if present.
+    * date: "UTCDate\|null"
+      Date the image or video was captured (from EXIF
+      DateTimeOriginal or equivalent), if present.
+    * gps: "ImageGPS\|null"
+      GPS coordinates from EXIF, if present.  An ImageGPS
+      object has the following properties:
+      * latitude: "Number" — Latitude in decimal degrees.
+      * longitude: "Number" — Longitude in decimal degrees.
+    * duration: "UnsignedInt\|null"
+      Duration in seconds for video content, if known.
+    * comment: "String\|null"
+      Embedded EXIF comment or description, if present.
 
 ## Additions to DataSourceObject
 
@@ -1147,6 +1182,11 @@ Reference: this document
 EDITOR: please remove this section before publication.
 
 The source of this document exists on github at: https://github.com/brong/draft-gondwana-jmap-blobext/
+
+**draft-gondwana-jmap-blobext-05**
+
+* Added imageData property to Blob/get for image/video metadata
+  extraction (dimensions, orientation, date, GPS, duration).
 
 **draft-gondwana-jmap-blobext-04**
 
