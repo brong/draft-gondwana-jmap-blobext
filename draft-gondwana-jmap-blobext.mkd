@@ -665,8 +665,15 @@ algorithm.  It is an object with the following properties:
 Errors:
 
 * "notFound" — the referenced blobId does not exist.
-* "invalidProperties" — the type is not in `supportedCompressionTypes`.
+* "invalidProperties" — the type is not in
+  `supportedCompressionTypes`, or the server supports this type
+  for decompression only.
 * "tooLarge" — the source blob exceeds `maxConvertSize`.
+
+Note: as with `supportedArchiveTypes`, a server MAY support a
+type in `supportedCompressionTypes` for decompression
+(UnCompressRecipe) only.  If compression is not supported for a
+given type, the server MUST return an "invalidProperties" error.
 
 #### Considerations for application/gzip
 
@@ -1194,7 +1201,8 @@ The source of this document exists on github at: https://github.com/brong/draft-
 
 * Added imageData property to Blob/get for image/video metadata
   extraction (dimensions, orientation, date, GPS, duration).
-* Noted that supportedArchiveTypes may include extract-only types.
+* Noted that supportedArchiveTypes and supportedCompressionTypes
+  may include extract/decompress-only types.
 
 **draft-gondwana-jmap-blobext-04**
 
