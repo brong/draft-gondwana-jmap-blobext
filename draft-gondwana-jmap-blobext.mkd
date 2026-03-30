@@ -479,11 +479,18 @@ It is an object with the following properties:
 Errors:
 
 * "notFound" — a referenced entry blobId does not exist.
-* "invalidProperties" — the type is not in `supportedArchiveTypes`;
-  an entry has an unsupported entryType for the archive format; or
-  a required field (e.g. linkTarget for symlink entries) is missing.
+* "invalidProperties" — the type is not in `supportedArchiveTypes`,
+  or the server supports this type for extraction only (see note
+  below); an entry has an unsupported entryType for the archive
+  format; or a required field (e.g. linkTarget for symlink entries)
+  is missing.
 * "tooLarge" — the number of entries exceeds `maxArchiveEntries`,
   or a referenced blob exceeds `maxConvertSize`.
+
+Note: a server MAY support a type in `supportedArchiveTypes` for
+extraction (UnArchiveRecipe) only.  If archive creation is not
+supported for a given type, the server MUST return an
+"invalidProperties" error.
 
 #### ArchiveEntry
 
@@ -1187,6 +1194,7 @@ The source of this document exists on github at: https://github.com/brong/draft-
 
 * Added imageData property to Blob/get for image/video metadata
   extraction (dimensions, orientation, date, GPS, duration).
+* Noted that supportedArchiveTypes may include extract-only types.
 
 **draft-gondwana-jmap-blobext-04**
 
