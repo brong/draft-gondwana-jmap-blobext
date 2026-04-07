@@ -94,47 +94,61 @@ on server capabilities and permissions for that account:
     choose whether to store them as an array of blobs still, or
     to combine them.
 
-* supportedImageTypes: "String[]"
+* supportedImageReadTypes: "String[]\|null"
 
-    The media types ({{MEDIA-TYPES}}) supported for ImageConvertRecipe.
+    The media types ({{MEDIA-TYPES}}) that the server can read as
+    input to ImageConvertRecipe.  If null, the server does not
+    support image conversion.
 
-* supportedArchiveTypes: "String[]"
+* supportedImageWriteTypes: "String[]\|null"
+
+    The media types ({{MEDIA-TYPES}}) that the server can produce
+    as output from ImageConvertRecipe.  If null, the server does
+    not support image conversion.
+
+* supportedArchiveTypes: "String[]\|null"
 
     The archive MIME types supported for creating archives via
     ArchiveRecipe.  Defined values are "application/zip",
-    "application/x-tar", and "application/x-cpio".
+    "application/x-tar", and "application/x-cpio".  If null,
+    the server does not support archive creation.
 
-* supportedExtractTypes: "String[]"
+* supportedExtractTypes: "String[]\|null"
 
     The archive MIME types supported for extracting archives via
     ExtractRecipe.  This MAY include types not in
     `supportedArchiveTypes` (e.g., "application/vnd.ms-tnef").
+    If null, the server does not support archive extraction.
 
-* supportedCompressTypes: "String[]"
+* supportedCompressTypes: "String[]\|null"
 
     The compression MIME types supported for compressing via
     CompressRecipe.  Defined values are "application/gzip",
     "application/x-bzip2", "application/x-xz", and
-    "application/zstd".
+    "application/zstd".  If null, the server does not support
+    compression.
 
-* supportedDecompressTypes: "String[]"
+* supportedDecompressTypes: "String[]\|null"
 
     The compression MIME types supported for decompressing via
     DecompressRecipe.  This MAY include types not in
-    `supportedCompressTypes`.
+    `supportedCompressTypes`.  If null, the server does not
+    support decompression.
 
-* supportedDeltaTypes: "String[]"
+* supportedDeltaTypes: "String[]\|null"
 
     The delta media types supported for computing deltas via
     DeltaRecipe.  Defined values are
     "application/x-rdiff-delta", "application/x-bsdiff", and
-    "text/x-diff" (unified diff).
+    "text/x-diff" (unified diff).  If null, the server does
+    not support delta computation.
 
-* supportedPatchTypes: "String[]"
+* supportedPatchTypes: "String[]\|null"
 
     The delta media types supported for applying patches via
     PatchRecipe.  This MAY include types not in
-    `supportedDeltaTypes`.
+    `supportedDeltaTypes`.  If null, the server does not
+    support patch application.
 
 * maxConvertSize: "UnsignedInt\|null"
 
@@ -166,10 +180,15 @@ on server capabilities and permissions for that account:
 {
   "urn:ietf:params:jmap:blobext": {
     "chunkSize": 5242880,
-    "supportedImageTypes": [
+    "supportedImageReadTypes": [
       "image/png",
       "image/jpeg",
-      "image/gif"
+      "image/gif",
+      "image/tiff"
+    ],
+    "supportedImageWriteTypes": [
+      "image/png",
+      "image/jpeg"
     ],
     "supportedArchiveTypes": [
       "application/zip",
@@ -253,7 +272,9 @@ request argument:
   for each DataSourceObject in the `chunks` array.  If omitted, the
   default of `["blobId", "size"]` is used.  Available properties
   include `blobId`, `size`, `offset`, `length`, `position`, and
-  `digest:*` values (e.g. `digest:sha-256`).
+  `digest:*` values where `*` is a hash algorithm name from the
+  IANA "Hash Function Textual Names" registry (e.g.
+  `digest:sha-256`).
 
 Blob/get also returns an additional response property (returned by
 default when this capability is included in `using`):
@@ -290,7 +311,9 @@ the `properties` array:
     * height: "UnsignedInt\|null"
       Height of the image in pixels, if known.
     * orientation: "UnsignedInt\|null"
-      EXIF orientation value (1-8), if present.
+      EXIF orientation value (1-8) as defined in the EXIF
+      specification (CIPA DC-008).  If present, indicates how
+      the image should be rotated/flipped for display.
     * date: "UTCDate\|null"
       Date the image or video was captured (from EXIF
       DateTimeOriginal or equivalent), if present.
@@ -299,10 +322,13 @@ the `properties` array:
       object has the following properties:
       * latitude: "Number" — Latitude in decimal degrees.
       * longitude: "Number" — Longitude in decimal degrees.
-    * duration: "UnsignedInt\|null"
-      Duration in seconds for video content, if known.
+    * duration: "Number\|null"
+      Duration in seconds for video content, if known.  This
+      is a floating-point number to allow sub-second precision.
     * comment: "String\|null"
-      Embedded EXIF comment or description, if present.
+      Embedded EXIF comment or description, if present.  This
+      is read-only — it reflects the metadata stored in the
+      blob content and is not a user-editable property.
 
 ## Additions to Blob/upload
 
@@ -457,7 +483,8 @@ or size.  It is an object with the following properties:
 * type: "String"
   Media type ({{MEDIA-TYPES}}) of the image to create (e.g.
   "image/png").  MUST be one of the values in the server's
-  `supportedImageTypes` capability.
+  `supportedImageWriteTypes` capability.  The source image MUST
+  be in a format listed in `supportedImageReadTypes`.
 * width: "UnsignedInt\|null"
   Maximum width in pixels of the image to create.  If null, the
   server preserves the source width (or scales proportionally if
@@ -498,8 +525,9 @@ or size.  It is an object with the following properties:
 Errors:
 
 * "notFound" — the referenced blobId does not exist.
-* "invalidProperties" — the type is not in `supportedImageTypes`, or
-  the source blob is not a supported image format.
+* "invalidProperties" — the type is not in
+  `supportedImageWriteTypes`, or the source blob is not in a format
+  listed in `supportedImageReadTypes`.
 * "tooLarge" — the source blob exceeds `maxConvertSize`, or the
   requested dimensions exceed `maxImageDimension`.
 * "conversionFailed" — the image conversion failed entirely.
@@ -1251,6 +1279,14 @@ The source of this document exists on github at: https://github.com/brong/draft-
 * Added conversionFailed error code for total conversion failure.
 * Made expires always present (null if indeterminate) rather than
   optional.
+* Split supportedImageTypes into supportedImageReadTypes and
+  supportedImageWriteTypes.
+* Made all supported type lists nullable (null = not supported).
+* Changed imageData duration from UnsignedInt to Number for
+  sub-second precision.
+* Clarified imageData comment as read-only.
+* Added EXIF orientation reference and digest algorithm registry
+  reference.
 
 **draft-gondwana-jmap-blobext-05**
 
