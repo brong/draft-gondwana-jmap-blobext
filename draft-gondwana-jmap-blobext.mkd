@@ -405,15 +405,10 @@ conversion.  The `id` is the blobId of the created blob.  The
 response also includes an `expires` property (see "The expires
 response property" above).
 
-Creation id backreferences (using the `#` prefix) resolve to
-this `id` and may be used in subsequent conversions within the
-same Blob/convert call or in later method calls within the same
-JMAP request.
-
 If the conversion completed but encountered problems (e.g., a
 corrupt archive where some entries extracted successfully but
 others did not, or a truncated compressed stream that partially
-decompressed), the response for that creation includes:
+decompressed), the response for that creation also includes:
 
 * isIncomplete: "Boolean" (default: false)
   If true, the conversion did not complete cleanly.  The output
@@ -424,6 +419,11 @@ decompressed), the response for that creation includes:
 If the conversion failed entirely and no usable output could be
 produced, the server MUST return a `conversionFailed` SetError
 in the `notCreated` map.
+
+Creation id backreferences (using the `#` prefix) resolve to
+the `id` of the created blob and may be used in subsequent
+conversions within the same Blob/convert call or in later
+method calls within the same JMAP request.
 
 A server MAY return a blobId for a conversion result without
 immediately generating the output data.  In this case the server
@@ -733,7 +733,7 @@ checksum is included in the frame; the default is false.
 
 ### DecompressRecipe
 
-An DecompressRecipe decompresses a compressed blob.  It is an object
+A DecompressRecipe decompresses a compressed blob.  It is an object
 with the following properties:
 
 * blobId: "BlobId"
@@ -810,9 +810,9 @@ The result blob is the patched output.
 Errors:
 
 * "notFound" — a referenced blobId does not exist.
-* "invalidProperties" — the deltaType is not in `supportedPatchTypes`.
 * "unknownFormat" — the delta blob is not valid for the specified
   format (e.g., corrupt or malformed delta data).
+* "invalidProperties" — the deltaType is not in `supportedPatchTypes`.
 * "tooLarge" — a referenced blob exceeds `maxConvertSize`.
 * "conversionFailed" — the patch application failed entirely.
 
