@@ -1,7 +1,7 @@
 ---
 title: JMAP Blob Extensions
 abbrev: JMAP Blob Extended
-docname: draft-gondwana-jmap-blobext-05
+docname: draft-gondwana-jmap-blobext-06
 submissionType: IETF
 category: std
 updates: 8620, 9404
@@ -19,11 +19,10 @@ author:
     email: brong@fastmailteam.com
 
 normative:
-    URI-TEMPLATE: RFC6570
     JMAP-CORE: RFC8620
     JMAP-BLOB: RFC9404
     MEDIA-TYPES: RFC6838
-    HTTP-RESUMABLE-UPLOADS: I-D.ietf-httpbis-resumable-upload
+
 
 informative:
 
@@ -83,11 +82,6 @@ property MUST be an empty object.
 The value of this property in an account's "accountCapabilities"
 property is an object that MUST contain the following information
 on server capabilities and permissions for that account:
-
-* resumableUploadUrl: "String\|null"
-
-    If present, a {{URI-TEMPLATE}} which supports {{HTTP-RESUMABLE-UPLOADS}}.
-    This MAY be the same as the uploadUrl, and has the same keys.
 
 * chunkSize: "UnsignedInt\|null"
 
@@ -171,7 +165,6 @@ on server capabilities and permissions for that account:
 ~~~json
 {
   "urn:ietf:params:jmap:blobext": {
-    "resumableUploadUrl": null,
     "chunkSize": 5242880,
     "supportedImageTypes": [
       "image/png",
@@ -350,11 +343,9 @@ following additional request properties:
 
 ## The "expires" response property
 
-When this capability is present, the following blob creation
-responses MAY include an additional property: the
-resumableUploadUrl response, the Blob/upload response
-({{JMAP-BLOB}}, Section 4), and the Blob/convert response defined
-below.
+When this capability is present, the Blob/upload response
+({{JMAP-BLOB}}, Section 4) and the Blob/convert response defined
+below include an additional property.
 
 * expires: "UTCDate\|null"
   A hint from the server indicating the likely availability of
@@ -362,8 +353,8 @@ below.
   time, and likely not to be available after it.  This is not a
   guarantee in either direction: the server MAY garbage collect
   the blob before this time if it is unreferenced, and MAY
-  retain it longer.  If null or absent, the server provides no
-  hint about the blob's lifetime.
+  retain it longer.  If null, the server does not have a
+  specific expiry time for the blob.
 
 Clients that need the blob to persist beyond the `expires` time
 should reference it from a persistent object (e.g., a FileNode
@@ -410,12 +401,29 @@ The response has the same structure as Blob/upload ({{JMAP-BLOB}},
 Section 4): a `created` map of creation id to an object containing
 `id`, `type`, and `size` for each successful conversion, and a
 `notCreated` map of creation id to a SetError object for each failed
-conversion.  The `id` is the blobId of the created blob.  The server
-MAY also return an `expires` property (see "The expires response
-property" above).  Creation id backreferences (using the `#` prefix)
-resolve to this `id` and may be used in subsequent conversions within
-the same Blob/convert call or in later method calls within the same
+conversion.  The `id` is the blobId of the created blob.  The
+response also includes an `expires` property (see "The expires
+response property" above).
+
+Creation id backreferences (using the `#` prefix) resolve to
+this `id` and may be used in subsequent conversions within the
+same Blob/convert call or in later method calls within the same
 JMAP request.
+
+If the conversion completed but encountered problems (e.g., a
+corrupt archive where some entries extracted successfully but
+others did not, or a truncated compressed stream that partially
+decompressed), the response for that creation includes:
+
+* isIncomplete: "Boolean" (default: false)
+  If true, the conversion did not complete cleanly.  The output
+  blob may be partial or missing some content.
+* description: "String\|null"
+  A human-readable description of the problem, if any.
+
+If the conversion failed entirely and no usable output could be
+produced, the server MUST return a `conversionFailed` SetError
+in the `notCreated` map.
 
 A server MAY return a blobId for a conversion result without
 immediately generating the output data.  In this case the server
@@ -494,6 +502,7 @@ Errors:
   the source blob is not a supported image format.
 * "tooLarge" — the source blob exceeds `maxConvertSize`, or the
   requested dimensions exceed `maxImageDimension`.
+* "conversionFailed" — the image conversion failed entirely.
 
 ### ArchiveRecipe
 
@@ -516,6 +525,7 @@ Errors:
   a required field (e.g. linkTarget for symlink entries) is missing.
 * "tooLarge" — the number of entries exceeds `maxArchiveEntries`,
   or a referenced blob exceeds `maxConvertSize`.
+* "conversionFailed" — the archive creation failed entirely.
 
 #### ArchiveEntry
 
@@ -664,6 +674,7 @@ Errors:
   the archive format.
 * "invalidProperties" — the type is not in `supportedExtractTypes`.
 * "tooLarge" — the source blob exceeds `maxConvertSize`.
+* "conversionFailed" — the extraction failed entirely.
 
 ### CompressRecipe
 
@@ -692,6 +703,7 @@ Errors:
 * "notFound" — the referenced blobId does not exist.
 * "invalidProperties" — the type is not in `supportedCompressTypes`.
 * "tooLarge" — the source blob exceeds `maxConvertSize`.
+* "conversionFailed" — the compression failed entirely.
 
 #### Considerations for application/gzip
 
@@ -738,6 +750,7 @@ Errors:
   the compression format.
 * "invalidProperties" — the type is not in `supportedDecompressTypes`.
 * "tooLarge" — the source blob exceeds `maxConvertSize`.
+* "conversionFailed" — the decompression failed entirely.
 
 ### DeltaRecipe
 
@@ -760,6 +773,7 @@ Errors:
 * "notFound" — a referenced blobId does not exist.
 * "invalidProperties" — the type is not in `supportedDeltaTypes`.
 * "tooLarge" — a referenced blob exceeds `maxConvertSize`.
+* "conversionFailed" — the delta computation failed entirely.
 
 #### Considerations for application/x-rdiff-delta
 
@@ -800,6 +814,7 @@ Errors:
 * "unknownFormat" — the delta blob is not valid for the specified
   format (e.g., corrupt or malformed delta data).
 * "tooLarge" — a referenced blob exceeds `maxConvertSize`.
+* "conversionFailed" — the patch application failed entirely.
 
 # Examples
 
@@ -1209,11 +1224,33 @@ the blob.
 
 Reference: this document
 
+### conversionFailed
+
+JMAP Error Code: conversionFailed
+
+Intended use: common
+
+Change Controller: IETF
+
+Description: The server was unable to perform the requested blob
+conversion.
+
+Reference: this document
+
 # Changes
 
 EDITOR: please remove this section before publication.
 
 The source of this document exists on github at: https://github.com/brong/draft-gondwana-jmap-blobext/
+
+**draft-gondwana-jmap-blobext-06**
+
+* Removed resumableUploadUrl capability property.
+* Added isIncomplete and description response properties for
+  partial conversion results.
+* Added conversionFailed error code for total conversion failure.
+* Made expires always present (null if indeterminate) rather than
+  optional.
 
 **draft-gondwana-jmap-blobext-05**
 
