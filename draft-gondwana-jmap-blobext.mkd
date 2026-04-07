@@ -1287,6 +1287,9 @@ The source of this document exists on github at: https://github.com/brong/draft-
 * Clarified imageData comment as read-only.
 * Added EXIF orientation reference and digest algorithm registry
   reference.
+* Fixed grammar and consistent error ordering across recipes.
+* Structural reorder: DataSourceObject before Blob/get, ArchiveEntry
+  promoted to peer section.
 
 **draft-gondwana-jmap-blobext-05**
 
