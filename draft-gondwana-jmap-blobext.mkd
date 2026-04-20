@@ -29,34 +29,41 @@ informative:
 
 --- abstract
 
-The JMAP base protocol (RFC8620) provides the ability to upload and download
-arbitrary binary data via HTTP POST and GET on a defined endpoint.  This
-binary data is called a "blob".
+The JSON Meta Application Protocol (JMAP) base protocol ({{RFC8620}})
+provides the ability to upload and download arbitrary binary data via HTTP
+POST and GET on a defined endpoint.  This binary data is called a "blob".
 
-This document extends blob management with additional methods to create and
-access blobs via inline method calls within a standard JMAP request,
-providing a reverse lookup mechanism to discover where blobs are referenced,
-supporting large blobs via chunked construction, and providing server-side
-blob conversion operations: image format conversion, archive creation and
-extraction (zip, tar, cpio), compression and decompression, and delta/patch
-operations.
+This extension adds additional ways to create and access blobs by making
+inline method calls within a standard JMAP request.  It also adds a reverse
+lookup mechanism to discover where blobs are referenced within other data
+types, support for large blobs via chunked construction with server-side
+optimisation, and server-side blob conversion operations including image
+format conversion, archive creation and extraction, compression and
+decompression, and delta/patch operations.
 
 --- middle
 
 # Introduction
 
-JMAP ({{JMAP-CORE}} — JSON Meta Application Protocol) is a generic
-protocol for synchronizing data between a client and a server.
-It is optimized for mobile and web environments, and aims to
-provide a consistent interface to different data types.
+Sometimes JMAP ({{JMAP-CORE}}) interactions require creating a blob and then
+referencing it.  Embedding blobs directly into the JMAP method calls array
+can reduce round trips.
 
-The JMAP base protocol provides blob upload and download via HTTP POST and
-GET, but does not provide a way to create blobs inline within a JMAP request,
-look up which objects reference a blob, or perform server-side transformations.
+Likewise, when fetching an object, it can be useful to also fetch the raw
+content of that object without a separate round trip.
 
-This document defines the `urn:ietf:params:jmap:blobext` capability, which
-provides all blob methods (Blob/set, Blob/get, Blob/lookup, and Blob/convert)
-as a self-contained unit.
+When JMAP is proxied through a system that applies additional access
+restrictions, it can be useful to know which objects reference any particular
+blob; this document defines a way to discover those references.
+
+For large blobs, a client may wish to upload data in chunks and have the
+server assemble them efficiently, or retrieve information about how the server
+has stored a blob internally.
+
+Many applications also benefit from server-side transformations — converting
+images, creating or unpacking archives, compressing or decompressing data, or
+computing and applying deltas — without needing to download and re-upload
+blob content.
 
 ## Conventions Used in This Document
 
