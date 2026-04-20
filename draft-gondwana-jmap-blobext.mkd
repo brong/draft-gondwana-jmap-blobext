@@ -1,11 +1,11 @@
 ---
-title: JMAP Blob Extensions
-abbrev: JMAP Blob Extended
-docname: draft-gondwana-jmap-blobext-06
+title: JMAP Blob Management
+abbrev: JMAP Blob
+docname: draft-ietf-jmap-blobext-01
 submissionType: IETF
 category: std
-updates: 8620, 9404
-obsoletes:
+updates: 8620
+obsoletes: 9404
 ipr: trust200902
 keyword: Internet-Draft
 stand_alone: yes
@@ -20,8 +20,9 @@ author:
 
 normative:
     JMAP-CORE: RFC8620
-    JMAP-BLOB: RFC9404
     MEDIA-TYPES: RFC6838
+    BASE64: RFC4648
+    DIGEST-ALGORITHMS: RFC3230
 
 
 informative:
@@ -29,30 +30,33 @@ informative:
 --- abstract
 
 The JMAP base protocol (RFC8620) provides the ability to upload and download
-arbitrary binary data.  This binary data is called a "blob", and can be used
-in all other JMAP extensions.
+arbitrary binary data via HTTP POST and GET on a defined endpoint.  This
+binary data is called a "blob".
 
-The JMAP blob extension (RFC9404) added additional ways to create and access
-blobs by making inline method calls within a standard JMAP request.
-
-This extension adds more methods to work with blobs, including handling large
-blobs by processing them in chunks (building on RFC9404's blob construction
-support), and providing server-side blob conversion operations: image format
-conversion, archive creation and extraction (zip, tar, cpio), compression
-and decompression, and delta/patch operations.
+This document extends blob management with additional methods to create and
+access blobs via inline method calls within a standard JMAP request,
+providing a reverse lookup mechanism to discover where blobs are referenced,
+supporting large blobs via chunked construction, and providing server-side
+blob conversion operations: image format conversion, archive creation and
+extraction (zip, tar, cpio), compression and decompression, and delta/patch
+operations.
 
 --- middle
 
 # Introduction
 
-The JMAP Blob extension ({{JMAP-BLOB}} — JMAP Blob Management) offers additional
-ways to create blobs, and query where they are used.
+JMAP ({{JMAP-CORE}} — JSON Meta Application Protocol) is a generic
+protocol for synchronizing data between a client and a server.
+It is optimized for mobile and web environments, and aims to
+provide a consistent interface to different data types.
 
-This extension builds on that work, offering ways to find more information about
-the internal structure of the server's blob store in order to work efficiently
-with it, and a new Blob/convert method for server-side blob transformations
-including image format conversion, archive creation and extraction, compression
-and decompression, and delta/patch operations.
+The JMAP base protocol provides blob upload and download via HTTP POST and
+GET, but does not provide a way to create blobs inline within a JMAP request,
+look up which objects reference a blob, or perform server-side transformations.
+
+This document defines the `urn:ietf:params:jmap:blobext` capability, which
+provides all blob methods (Blob/set, Blob/get, Blob/lookup, and Blob/convert)
+as a self-contained unit.
 
 ## Conventions Used in This Document
 
@@ -63,18 +67,22 @@ and decompression, and delta/patch operations.
 The capabilities object is returned as part of the JMAP Session
 object; see {{JMAP-CORE}}, Section 2.
 
-This document defines an additional capability URI.
+This document defines one additional capability URI.
 
 ## urn:ietf:params:jmap:blobext
 
 The capability `urn:ietf:params:jmap:blobext` being present in the
 "accountCapabilities" property of an account represents support for
-these extended properties on that account.  This capability depends
-on `urn:ietf:params:jmap:blob` ({{JMAP-BLOB}}); both MUST be present
-in the account's "accountCapabilities" and in the request's `using`
-array.  If this capability is present in one or more
-"accountCapabilities" properties then the server MUST also include
-the key in the "capabilities" property.
+the blob methods defined in this document: Blob/set, Blob/get,
+Blob/lookup, and Blob/convert.  Servers that include this capability
+in one or more "accountCapabilities" properties MUST also include it
+in the "capabilities" property.
+
+A server MAY also advertise `urn:ietf:params:jmap:blob` (as defined
+in RFC9404) to support older clients, but a client MUST NOT include
+both `urn:ietf:params:jmap:blob` and `urn:ietf:params:jmap:blobext`
+in the `using` array of the same request.  The blobext capability
+supersedes the blob capability and does not depend on it.
 
 The value of this property in the JMAP session "capabilities"
 property MUST be an empty object.
@@ -83,14 +91,44 @@ The value of this property in an account's "accountCapabilities"
 property is an object that MUST contain the following information
 on server capabilities and permissions for that account:
 
+* maxSizeBlobSet: "UnsignedInt\|null"
+
+    The maximum size of a blob (in octets) that the server will
+    allow to be created (including blobs created by concatenating
+    multiple data sources together).  If null, the server does not
+    advertise a specific limit but MAY still reject blobs that are
+    too large.
+
+* maxDataSources: "UnsignedInt"
+
+    The maximum number of DataSourceObjects allowed in the `data`
+    array of a single creation in Blob/set.  Servers MUST support
+    at least 64 DataSourceObjects per creation.
+
+* supportedTypeNames: "String[]"
+
+    An array of data type names that the server supports for
+    Blob/lookup.  The values are the names listed in the IANA "JMAP
+    Data Types" registry.  If the array is empty, the server does
+    not support Blob/lookup.  Servers MAY include private type names
+    not in the registry; clients MUST ignore names they do not
+    recognise.
+
+* supportedDigestAlgorithms: "String[]"
+
+    An array of digest algorithms supported for Blob/get, from the
+    IANA "Hash Function Textual Names" registry, expressed in
+    lowercase (e.g., "sha", "sha-256").  Clients SHOULD prefer
+    algorithms listed earlier in the array.
+
 * chunkSize: "UnsignedInt\|null"
 
     A hint indicating the preferred chunk size in octets.  If a
     client uploads blobs with exactly this size except for the
-    final chunk, and uses Blob/upload with DataSourceObjects
+    final chunk, and uses Blob/set with DataSourceObjects
     referencing these chunks, the server can optimise storage of
     these chunks.  Servers MUST allow other sizes for the
-    individual data blocks in Blob/upload though, and will then
+    individual data blocks in Blob/set though, and will then
     choose whether to store them as an array of blobs still, or
     to combine them.
 
@@ -179,6 +217,10 @@ on server capabilities and permissions for that account:
 ~~~json
 {
   "urn:ietf:params:jmap:blobext": {
+    "maxSizeBlobSet": 52428800,
+    "maxDataSources": 64,
+    "supportedTypeNames": ["Email", "Thread", "Mailbox"],
+    "supportedDigestAlgorithms": ["sha-256", "sha"],
     "chunkSize": 5242880,
     "supportedImageReadTypes": [
       "image/png",
@@ -223,86 +265,273 @@ on server capabilities and permissions for that account:
 }
 ~~~
 
-## Additions to DataSourceObject
+# DataSourceObject
 
-When this capability is present, the DataSourceObject (as defined in
-{{JMAP-BLOB}}, Section 4.2) is extended with the following additional
-properties.  These apply both to the `chunks` returned by Blob/get
-and to DataSourceObjects used in Blob/upload.  The `offset` and
-`length` properties are already defined in {{JMAP-BLOB}}; they are
-listed here to document their use in the `chunks` response context,
-where they describe the range of each chunk's underlying data source
-that contributes to the containing blob.
+A DataSourceObject describes a source of data for use in Blob/set.
+It MUST contain exactly one of either `data:asText` or `data:asBase64`
+(for inline data) or `blobId` (for a reference to an existing blob).
+The `data:asText` and `data:asBase64` properties MUST NOT both be
+present in the same DataSourceObject.
+
+* data:asText: "String\|null"
+
+    The data represented as a UTF-8 string.  The server MUST reject
+    the creation with a "notCreated" response if the value is not
+    valid UTF-8.
+
+* data:asBase64: "String\|null"
+
+    The data encoded as base64 ({{BASE64}}).  The server MUST reject
+    the creation with a "notCreated" response if the value is not
+    valid base64.
+
+* blobId: "BlobId"
+
+    The blobId of an existing blob whose octets are to be copied
+    into the new blob.
 
 * offset: "UnsignedInt\|null"
-  The offset within the data source from which to start copying
-  octets (see {{JMAP-BLOB}}).  MUST fit within the data source
-  (i.e. offset MUST be less than or equal to the data source size).
-  If null, defaults to 0 (the start of the data source).
-* length: "UnsignedInt\|null"
-  The number of octets to copy from the data source (see
-  {{JMAP-BLOB}}).  MUST fit within the data source (i.e. offset +
-  length MUST be less than or equal to the data source size).  If
-  null, copy from `offset` to the end of the data source.
-* size: "UnsignedInt\|null"
-  The full size of the chunk's underlying data source in octets.
-* position: "UnsignedInt\|null"
-  The byte offset of the start of this chunk within the outer
-  (containing) blob.
 
-If a `digest:*` property (e.g. `digest:sha`, `digest:sha-256`) is
-included in `dataSourceProperties`, each DataSourceObject in the
-`chunks` array will include the corresponding digest value computed
-over the octets that this chunk contributes (i.e. after applying
-`offset` and `length`).
+    The offset (in octets) within the data source from which to
+    start copying.  If null, defaults to 0 (the start of the data
+    source).  If the range cannot be fully satisfied (i.e., it
+    begins or extends past the end of the data), the DataSourceObject
+    is invalid and the creation MUST be rejected with a "notCreated"
+    response.
+
+* length: "UnsignedInt\|null"
+
+    The number of octets to copy from the data source.  If null,
+    copy from `offset` to the end of the data source.  If the range
+    cannot be fully satisfied, the DataSourceObject is invalid and
+    the creation MUST be rejected with a "notCreated" response.
+
+* size: "UnsignedInt\|null"
+
+    The full size of the data source in octets.  In the `chunks`
+    array of a Blob/get response this is the size of the underlying
+    chunk blob.
+
+* position: "UnsignedInt\|null"
+
+    The byte offset of the start of this data source within the
+    outer (containing) blob.  Only meaningful in the `chunks` array
+    of a Blob/get response.
+
+A DataSourceObject in the `chunks` array of a Blob/get response MAY
+also include `digest:*` properties (e.g. `digest:sha-256`) when
+those names are included in the `dataSourceProperties` request
+argument.  Each digest value is computed over the octets that the
+chunk contributes to the blob (i.e. after applying `offset` and
+`length`).
 
 When a server provides `size`, `position`, or `digest:*` values in
 a Blob/get response, it MUST calculate them correctly.  When a
 DataSourceObject containing `size`, `position`, or `digest:*` values
-is used in Blob/upload, the server MUST reject the object if any
+is used in Blob/set, the server MUST reject the object if any
 provided value does not match the actual data.
 
-## Additions to Blob/get
+# Blob/set
 
-When this capability is present, Blob/get accepts an additional
-request argument:
+Blob/set is defined under the `urn:ietf:params:jmap:blobext` capability
+and requires that capability in the request's `using` array.
+
+This method creates, touches, and destroys blobs.  Unlike a typical
+Foo/set method, blobs do not have a state string, so Blob/set does
+not accept `ifInState` and does not return `oldState` or `newState`
+in the response.
+
+The method takes the following arguments:
+
+* accountId: "Id"
+
+    The id of the account to use.
+
+* create: "Id\[UploadObject\]\|null" (default: null)
+
+    A map of creation id (an arbitrary string set by the client) to
+    UploadObjects.
+
+* update: "Id\[Object\]\|null" (default: null)
+
+    A map of blobId to an empty object.  No properties may be set
+    on a blob; the purpose of update is to "touch" the blob,
+    refreshing its lifetime on the server.  If the blobId does not
+    exist, it MUST be reported in a `notUpdated` map with a
+    "notFound" SetError.
+
+* destroy: "Id[]\|null" (default: null)
+
+    An array of blobIds to destroy.  The server MUST reject any
+    blob that is still referenced by another object with a
+    "blobHasReference" SetError.  If the blobId does not exist,
+    the server MUST return a "notFound" SetError.
+
+An UploadObject has the following properties:
+
+* data: "DataSourceObject[]"
+
+    An array of zero or more DataSourceObjects.  The new blob is
+    formed by concatenating the data described by each DataSourceObject
+    in the order given.
+
+* type: "String\|null" (default: null)
+
+    A media type hint ({{MEDIA-TYPES}}) for the blob.  The server
+    MAY use this when setting the Content-Type of a subsequent
+    download of the blob, but is not required to.  The server MAY
+    infer the type itself and override the client's hint.
+
+* noPersist: "Boolean" (default: false)
+
+    If true, the resulting blob is ephemeral: it may be referenced
+    via creation id backreferences within the same JMAP request,
+    but the server is not required to persist it beyond the lifetime
+    of the request.  The server MAY omit ephemeral blobs from the
+    `created` map of the response and from the `createdIds` of the
+    final Response object if it did not create a referenceable blob.
+    This allows servers to optimise pipelines where intermediate
+    blobs are never needed after the request completes.
+
+The server MUST NOT guess the user's intent when a DataSourceObject is
+invalid (e.g., contains non-UTF-8 data in `data:asText` or invalid
+base64 in `data:asBase64`).  It MUST reject the creation and return a
+"notCreated" response for that creation id.
+
+The response to Blob/set contains the following:
+
+* accountId: "Id"
+
+    The id of the account used for the operation.
+
+* created: "Id\[BlobObject\]\|null"
+
+    A map of creation id to BlobObject for each successfully created
+    blob.  This is null (or omitted) if no blobs were created.
+
+* notCreated: "Id\[SetError\]\|null"
+
+    A map of creation id to a SetError for each blob that failed to
+    be created.  This is null (or omitted) if all creations were
+    successful.
+
+* updated: "Id\[BlobObject\|null\]\|null"
+
+    A map of blobId to a BlobObject (or null if no response
+    properties changed) for each successfully touched blob.
+    The BlobObject MAY include an `expires` property with the new
+    expiry time.  This is null (or omitted) if no update was
+    requested or all failed.
+
+* notUpdated: "Id\[SetError\]\|null"
+
+    A map of blobId to a SetError for each blob that failed to be
+    updated.  This is null (or omitted) if all updates were
+    successful.
+
+* destroyed: "Id[]\|null"
+
+    An array of blobIds that were successfully destroyed.  This is
+    null (or omitted) if no blobs were destroyed.
+
+* notDestroyed: "Id\[SetError\]\|null"
+
+    A map of blobId to a SetError for each blob that failed to be
+    destroyed.  This is null (or omitted) if all destroys were
+    successful.
+
+A BlobObject has the following properties:
+
+* id: "BlobId"
+
+    The id of the blob.
+
+* type: "String\|null"
+
+    The media type of the blob, or null if unknown.
+
+* size: "UnsignedInt"
+
+    The size of the blob in octets.
+
+* expires: "UTCDate\|null"
+
+    See "The expires Response Property" below.
+
+For each successful creation, the server MUST add an entry to the
+`createdIds` map in the response, mapping the creation id to the
+blobId.  This allows later methods in the same Request Object to
+reference the created blob via a backreference.
+
+# Blob/get
+
+Blob/get is defined under the `urn:ietf:params:jmap:blobext` capability
+and requires that capability in the request's `using` array.
+
+This method retrieves blob data.  It is a standard Foo/get method
+({{JMAP-CORE}}, Section 5.1) with the following additional parameters
+and a custom response.
+
+In addition to the standard `accountId`, `ids`, and `properties`
+arguments, Blob/get accepts:
+
+* offset: "UnsignedInt\|null" (default: null)
+
+    The starting byte position within the blob.  If null, defaults
+    to 0.
+
+* length: "UnsignedInt\|null" (default: null)
+
+    The number of bytes to return.  If null, returns all bytes from
+    `offset` to the end of the blob.
 
 * dataSourceProperties: "String[]" (default: \["blobId", "size"\])
-  If supplied, only the properties listed in the array are returned
-  for each DataSourceObject in the `chunks` array.  If omitted, the
-  default of `["blobId", "size"]` is used.  Available properties
-  include `blobId`, `size`, `offset`, `length`, `position`, and
-  `digest:*` values where `*` is a hash algorithm name from the
-  IANA "Hash Function Textual Names" registry (e.g.
-  `digest:sha-256`).
 
-Blob/get also returns an additional response property (returned by
-default when this capability is included in `using`):
+    If supplied, only the properties listed in the array are returned
+    for each DataSourceObject in the `chunks` array.  Available
+    properties include `blobId`, `size`, `offset`, `length`,
+    `position`, and `digest:*` values where `*` is a hash algorithm
+    name from the IANA "Hash Function Textual Names" registry (e.g.
+    `digest:sha-256`).
 
-* chunks: "DataSourceObject[]"
+The requestable properties in the `properties` array are:
 
-    An array of one or more data source objects (as defined in {{JMAP-BLOB}},
-    Section 4.2).  The blob is reconstructed by concatenating the data
-    from each data source object in the listed order.  While it is
-    expected that each data source object will reference the entire
-    underlying chunk blob, the server MAY return offset and length values
-    that select only a portion of a chunk's blob.  The client MUST use
-    the offset and length to determine which octets to read from each
-    chunk.
+* data:asText
 
-Blob/get also accepts the following additional property in
-the `properties` array:
+    The data in the selected range as a UTF-8 string.  If the
+    selected bytes are not valid UTF-8 (including truncation in the
+    middle of a multi-octet sequence), the response value is null
+    and `isEncodingProblem` is set to true.
 
-* imageData: "ImageData\|null" (server-set)
+* data:asBase64
+
+    The data in the selected range encoded as base64 ({{BASE64}}).
+
+* data
+
+    Returns `data:asText` if the selected bytes are valid UTF-8,
+    otherwise returns `data:asBase64`.
+
+* digest:\<algorithm\>
+
+    The base64-encoded digest of the selected range, computed using
+    the named algorithm.  The algorithm name MUST appear in the
+    server's `supportedDigestAlgorithms` capability.
+
+* size
+
+    The total size of the blob in octets, regardless of the range
+    selected.
+
+* imageData
 
     If the blob is an image or video type and the server can
     extract metadata, this is an ImageData object.  Otherwise
-    null.  Only returned if explicitly requested in
-    `properties`.  The server MAY need to read the blob content
-    to compute this data, so clients SHOULD only request it
-    when needed.  Since blobs are immutable, the result for a
-    given blobId will never change, and the server SHOULD cache
-    it.
+    null.  Only returned if explicitly requested in `properties`.
+    The server MAY need to read the blob content to compute this
+    data, so clients SHOULD only request it when needed.  Since
+    blobs are immutable, the result for a given blobId will never
+    change, and the server SHOULD cache it.
 
     An ImageData object has the following properties:
 
@@ -330,71 +559,129 @@ the `properties` array:
       is read-only — it reflects the metadata stored in the
       blob content and is not a user-editable property.
 
-## Additions to Blob/upload
+If neither `offset` nor `length` are specified (i.e., both null),
+the default properties are `data` and `size`.  Otherwise, the client
+MUST specify the `properties` to return.
 
-When this capability is present, each object in the Blob/upload
-({{JMAP-BLOB}}, Section 4) `create` map MAY include the following
-additional property:
+The response contains a `list` of objects, one per blobId.  Each
+object contains the requested properties plus:
 
-* noPersist: "Boolean" (default: false)
-  If true, the resulting blob is ephemeral: it may be referenced via
-  creation id backreferences within the same JMAP request, but the
-  server is not required to persist it beyond the lifetime of the
-  request.  The server MAY omit ephemeral blobs from the `created`
-  map of the response and from the `createdIds` of the final Response
-  object if it did not create a referenceable blob.  This allows
-  servers to optimise pipelines where intermediate blobs are never
-  needed after the request completes.
+* id: "BlobId"
 
-When this capability is present, Blob/upload also gains the
-following additional request properties:
+    The blobId of the blob.
 
-* update: "Id\[Object\]" (default: null)
-  A map of blobId to an empty object.  No properties may be
-  set on a blob; the purpose of update is to "touch" the blob,
-  refreshing its lifetime on the server.  The response includes
-  an `updated` map of blobId to an object which MAY contain an
-  `expires` property with the new expiry time.  If the blobId
-  does not exist, it MUST be reported in a `notUpdated` map
-  with a `notFound` SetError.
+* isEncodingProblem: "Boolean" (default: false)
 
-* destroy: "Id[]" (default: null)
-  An array of blobIds to destroy.  The server MUST reject
-  any blob that is still referenced by another object with a
-  `blobHasReference` SetError.  If the blobId does not exist, the
-  server MUST return a `notFound` SetError.  Successfully
-  destroyed blobIds are returned in a `destroyed` array.
-  Failed destroys are returned in a `notDestroyed` map of
-  blobId to SetError.
+    Set to true if `data` or `data:asText` was requested but the
+    selected range is not valid UTF-8.
 
-## The "expires" response property
+* isTruncated: "Boolean" (default: false)
 
-When this capability is present, the Blob/upload response
-({{JMAP-BLOB}}, Section 4) and the Blob/convert response defined
-below include an additional property.
+    Set to true if the selected range extends past the end of the
+    blob.  In this case, only the bytes from `offset` to the end of
+    the blob (or an empty string if `offset` is past the end) are
+    returned.
+
+* chunks: "DataSourceObject[]"
+
+    An array of one or more data source objects describing the
+    internal chunk structure of the blob.  The blob is reconstructed
+    by concatenating the data from each data source object in the
+    listed order.  The client MUST use the `offset` and `length`
+    of each DataSourceObject to determine which octets to read from
+    each chunk's underlying blob.
+
+    This property MUST be explicitly requested in `properties`.
+
+The response also contains:
+
+* accountId: "Id"
+
+    The id of the account used for the operation.
+
+* notFound: "Id[]"
+
+    An array of blobIds that were not found.
+
+# Blob/lookup
+
+Blob/lookup is defined under the `urn:ietf:params:jmap:blobext`
+capability and requires that capability in the request's `using`
+array.
+
+This method provides a reverse lookup: given a set of blobIds, it
+returns which objects of specified data types reference those blobs.
+
+The method takes the following arguments:
+
+* accountId: "Id"
+
+    The id of the account to use.
+
+* typeNames: "String[]"
+
+    A list of data type names to search.  Only type names listed in
+    the server's `supportedTypeNames` capability are valid.  If a
+    type name is not known by the server or the associated capability
+    has not been requested in `using`, the server MUST return an
+    "unknownDataType" error.
+
+* ids: "BlobId[]"
+
+    The blobIds to look up.
+
+The response contains:
+
+* accountId: "Id"
+
+    The id of the account used for the operation.
+
+* list: "BlobInfo[]"
+
+    A list of BlobInfo objects, one per blobId.  A BlobInfo object
+    has the following properties:
+
+    * id: "BlobId"
+      The blobId queried.
+
+    * matchedIds: "String\[Id[]\]"
+      An object mapping each requested type name to an array of
+      object ids of that type that reference this blob.  If no
+      objects of that type reference this blob, the array is empty.
+
+Access control: if a blob is not visible to the authenticated user or
+does not exist on the server at all, the server MUST still return an
+empty array for each type name.  This ensures that the response does
+not reveal whether the blob exists but is inaccessible to the user.
+
+# The "expires" Response Property
+
+The Blob/set response and the Blob/convert response include the
+following property on each BlobObject:
 
 * expires: "UTCDate\|null"
-  A hint from the server indicating the likely availability of
-  the blob.  The blob is likely to remain available until this
-  time, and likely not to be available after it.  This is not a
-  guarantee in either direction: the server MAY garbage collect
-  the blob before this time if it is unreferenced, and MAY
-  retain it longer.  If null, the server does not have a
-  specific expiry time for the blob.
+
+    A hint from the server indicating the likely availability of
+    the blob.  The blob is likely to remain available until this
+    time, and likely not to be available after it.  This is not a
+    guarantee in either direction: the server MAY garbage collect
+    the blob before this time if it is unreferenced, and MAY
+    retain it longer.  If null, the server does not have a
+    specific expiry time for the blob.
 
 Clients that need the blob to persist beyond the `expires` time
 should reference it from a persistent object (e.g., a FileNode
 or an Email) before it expires.
 
-## New method Blob/convert
+# Blob/convert
 
 Blob/convert is defined under the `urn:ietf:params:jmap:blobext`
 capability and requires that capability in the request's `using`
 array.
 
 Blob/convert performs server-side transformations on blobs.  Like
-Blob/upload ({{JMAP-BLOB}}, Section 4), it takes an `accountId` and a
-`create` argument that maps creation ids to conversion request objects.
+Blob/set, it takes an `accountId` and a `create` argument that maps
+creation ids to conversion request objects.
 
 Each conversion request object MAY also include the following property:
 
@@ -423,13 +710,12 @@ following properties, which determines the type of conversion:
 
 * patch: PatchRecipe
 
-The response has the same structure as Blob/upload ({{JMAP-BLOB}},
-Section 4): a `created` map of creation id to an object containing
-`id`, `type`, and `size` for each successful conversion, and a
+The response has the same structure as Blob/set: a `created` map of
+creation id to a BlobObject for each successful conversion, and a
 `notCreated` map of creation id to a SetError object for each failed
 conversion.  The `id` is the blobId of the created blob.  The
-response also includes an `expires` property (see "The expires
-response property" above).
+response also includes an `expires` property on each BlobObject (see
+"The expires Response Property" above).
 
 If the conversion completed but encountered problems (e.g., a
 corrupt archive where some entries extracted successfully but
@@ -473,7 +759,7 @@ backreferences are satisfied.  If a dependency cycle is detected,
 all members of the cycle MUST be rejected with an
 "invalidProperties" error.
 
-### ImageConvertRecipe
+## ImageConvertRecipe
 
 An ImageConvertRecipe converts an image blob to a different format
 or size.  It is an object with the following properties:
@@ -532,7 +818,7 @@ Errors:
   requested dimensions exceed `maxImageDimension`.
 * "conversionFailed" — the image conversion failed entirely.
 
-### ArchiveRecipe
+## ArchiveRecipe
 
 An ArchiveRecipe creates an archive blob from a list of entries.
 It is an object with the following properties:
@@ -555,7 +841,7 @@ Errors:
   or a referenced blob exceeds `maxConvertSize`.
 * "conversionFailed" — the archive creation failed entirely.
 
-### ArchiveEntry
+## ArchiveEntry
 
 An ArchiveEntry describes a single entry in an archive.  It is used
 both as input (in ArchiveRecipe) and as output (in ExtractRecipe
@@ -608,14 +894,14 @@ results).  It is an object with the following properties:
   compression) and "deflate".  If null, the server chooses a
   reasonable default.
 
-#### Considerations for application/zip
+### Considerations for application/zip
 
 The zip format only supports "file" and "directory" entry types.
 The `comment` and `compressionMethod` properties are only meaningful
 for zip archives.  The `mode`, `uid`, `gid`, `ownerName`,
 `groupName`, `devMajor`, and `devMinor` properties are ignored.
 
-#### Considerations for application/x-tar
+### Considerations for application/x-tar
 
 The tar format supports all entry types.  The `mode`, `uid`, `gid`,
 `ownerName`, `groupName`, `devMajor`, and `devMinor` properties are
@@ -668,13 +954,13 @@ creation to the compression step:
 }, "0"]]
 ~~~
 
-#### Considerations for application/x-cpio
+### Considerations for application/x-cpio
 
 The cpio format supports all entry types except that `ownerName` and
 `groupName` are not supported.  The `comment` and
 `compressionMethod` properties are ignored.
 
-### ExtractRecipe
+## ExtractRecipe
 
 An ExtractRecipe extracts the entry listing from an existing archive
 blob.  It is an object with the following properties:
@@ -704,7 +990,7 @@ Errors:
 * "tooLarge" — the source blob exceeds `maxConvertSize`.
 * "conversionFailed" — the extraction failed entirely.
 
-### CompressRecipe
+## CompressRecipe
 
 A CompressRecipe compresses a blob using a specified compression
 algorithm.  It is an object with the following properties:
@@ -733,33 +1019,33 @@ Errors:
 * "tooLarge" — the source blob exceeds `maxConvertSize`.
 * "conversionFailed" — the compression failed entirely.
 
-#### Considerations for application/gzip
+### Considerations for application/gzip
 
 Compression level ranges from 1 (fastest) to 9 (best compression).
 The default is typically 6.  Gzip always includes a CRC-32 checksum;
 the `checksum` property is ignored.
 
-#### Considerations for application/x-bzip2
+### Considerations for application/x-bzip2
 
 Compression level ranges from 1 (fastest, 100k block size) to 9
 (best compression, 900k block size).  The default is typically 9.
 Bzip2 always includes a CRC-32 checksum; the `checksum` property is
 ignored.
 
-#### Considerations for application/x-xz
+### Considerations for application/x-xz
 
 Compression level ranges from 0 (fastest) to 9 (best compression).
 The default is typically 6.  Xz always includes an integrity check;
 if `checksum` is true the server SHOULD use SHA-256, otherwise CRC-64
 is used by default.
 
-#### Considerations for application/zstd
+### Considerations for application/zstd
 
 Compression level ranges from 1 (fastest) to 22 (best compression).
 The default is typically 3.  If `checksum` is true, an xxHash-64
 checksum is included in the frame; the default is false.
 
-### DecompressRecipe
+## DecompressRecipe
 
 A DecompressRecipe decompresses a compressed blob.  It is an object
 with the following properties:
@@ -780,7 +1066,7 @@ Errors:
 * "tooLarge" — the source blob exceeds `maxConvertSize`.
 * "conversionFailed" — the decompression failed entirely.
 
-### DeltaRecipe
+## DeltaRecipe
 
 A DeltaRecipe computes a delta between two blobs.  It is an object
 with the following properties:
@@ -803,24 +1089,24 @@ Errors:
 * "tooLarge" — a referenced blob exceeds `maxConvertSize`.
 * "conversionFailed" — the delta computation failed entirely.
 
-#### Considerations for application/x-rdiff-delta
+### Considerations for application/x-rdiff-delta
 
 The server computes an rdiff signature of the base blob and then
 generates a delta against the new blob.  The resulting delta blob
 can only be applied to the exact base blob used to generate it.
 
-#### Considerations for application/x-bsdiff
+### Considerations for application/x-bsdiff
 
 The server produces a bsdiff-format patch.  Both blobs must fit in
 memory; servers MAY reject very large blobs with a "tooLarge" error.
 
-#### Considerations for text/x-diff
+### Considerations for text/x-diff
 
 The server produces a unified diff.  Both blobs are interpreted as
 text.  If either blob contains content that cannot be interpreted as
 text, the server MUST return an "unknownFormat" error.
 
-### PatchRecipe
+## PatchRecipe
 
 A PatchRecipe applies a delta to a base blob to produce a new blob.
 It is an object with the following properties:
@@ -845,6 +1131,38 @@ Errors:
 * "conversionFailed" — the patch application failed entirely.
 
 # Examples
+
+## Uploading a Blob Inline
+
+This example creates a blob from inline text data:
+
+~~~json
+[["Blob/set", {
+  "accountId": "abc",
+  "create": {
+    "b1": {
+      "data": [{"data:asText": "Hello, world!"}],
+      "type": "text/plain"
+    }
+  }
+}, "0"]]
+~~~
+
+The response:
+
+~~~json
+[["Blob/set", {
+  "accountId": "abc",
+  "created": {
+    "b1": {
+      "id": "Babc123",
+      "type": "text/plain",
+      "size": 13
+    }
+  },
+  "notCreated": null
+}, "0"]]
+~~~
 
 ## Querying Blob Chunks
 
@@ -1153,8 +1471,21 @@ The result is a blob identical to "BnewVersion":
 
 # Security Considerations
 
-All security considerations from {{JMAP-CORE}} and {{JMAP-BLOB}} apply
-to this document.
+All security considerations from {{JMAP-CORE}} apply to this document.
+
+## Access Control
+
+Servers MUST NOT allow a client to access blob data that the
+authenticated user does not have permission to access.  When a
+DataSourceObject references a blobId, the server MUST verify that the
+requesting user has access to that blob.
+
+## Untrusted Data
+
+Clients that create blobs from inline data (data:asText or
+data:asBase64) MUST NOT assume that the server will accept all
+possible values.  Servers MUST reject malformed inputs as specified
+in the DataSourceObject definition.
 
 ## Resource Consumption
 
@@ -1196,7 +1527,7 @@ with ".." path components.
 ## Content Smuggling
 
 The ability to split content into multiple blobs, recombine them via
-Blob/upload, and apply delta patches may be used to bypass security
+Blob/set, and apply delta patches may be used to bypass security
 scanners that inspect blob content.  Servers that perform content
 scanning SHOULD scan the output of Blob/convert operations as well
 as the inputs.
@@ -1205,7 +1536,7 @@ as the inputs.
 
 ## JMAP Capability Registration for urn:ietf:params:jmap:blobext
 
-IANA is requested to register the "Blob Extended" Capability as follows:
+IANA is requested to register the "Blob Management" Capability as follows:
 
 Capability Name: urn:ietf:params:jmap:blobext
 
@@ -1221,6 +1552,21 @@ Security and privacy considerations: this document, Security Considerations
 
 IANA is requested to register the following entries in the "JMAP
 Error Codes" registry:
+
+### unknownDataType
+
+JMAP Error Code: unknownDataType
+
+Intended use: common
+
+Change Controller: IETF
+
+Description: The server does not recognise the data type specified
+in the typeNames array of a Blob/lookup request, or the capability
+required to use that data type has not been included in the `using`
+array of the request.
+
+Reference: this document
 
 ### unknownFormat
 
@@ -1247,8 +1593,7 @@ Change Controller: IETF
 
 Description: The blob cannot be destroyed because it is still
 referenced by one or more objects.  The client can use Blob/lookup
-({{JMAP-BLOB}}, Section 5) to discover which objects reference
-the blob.
+to discover which objects reference the blob.
 
 Reference: this document
 
@@ -1265,11 +1610,37 @@ conversion.
 
 Reference: this document
 
+## JMAP Data Types Registry
+
+IANA is requested to update the reference for the "JMAP Data Types"
+registry to this document (replacing the reference to RFC9404).
+
 # Changes
 
 EDITOR: please remove this section before publication.
 
 The source of this document exists on github at: https://github.com/brong/draft-gondwana-jmap-blobext/
+
+**draft-ietf-jmap-blobext-01**
+
+* Obsoletes RFC9404: incorporated all content from RFC9404 into
+  this document, making it self-contained.
+* Renamed Blob/upload to Blob/set, making it a standard Foo/set
+  operation with create, update, and destroy at the top level.
+* Added `urn:ietf:params:jmap:blob` capability definition (previously
+  defined only in RFC9404).
+* Added Blob/lookup method (previously defined only in RFC9404).
+* Added full DataSourceObject definition (merging RFC9404 base
+  definition with blobext extensions).
+* Added full Blob/get definition (merging RFC9404 base definition
+  with blobext extensions).
+* Added inline blob creation example.
+* Updated IANA section to include blob capability, unknownDataType
+  error code, and JMAP Data Types registry.
+
+**draft-ietf-jmap-blobext-00**
+
+* No changes, just uploading with the new name
 
 **draft-gondwana-jmap-blobext-06**
 
