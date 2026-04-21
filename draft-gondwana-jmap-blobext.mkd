@@ -76,9 +76,9 @@ object; see {{JMAP-CORE}}, Section 2.
 
 This document defines one additional capability URI.
 
-## urn:ietf:params:jmap:blobext
+## urn:ietf:params:jmap:blob2
 
-The capability `urn:ietf:params:jmap:blobext` being present in the
+The capability `urn:ietf:params:jmap:blob2` being present in the
 "accountCapabilities" property of an account represents support for
 the blob methods defined in this document: Blob/set, Blob/get,
 Blob/lookup, and Blob/convert.  Servers that include this capability
@@ -87,8 +87,8 @@ in the "capabilities" property.
 
 A server MAY also advertise `urn:ietf:params:jmap:blob` (as defined
 in RFC9404) to support older clients, but a client MUST NOT include
-both `urn:ietf:params:jmap:blob` and `urn:ietf:params:jmap:blobext`
-in the `using` array of the same request.  The blobext capability
+both `urn:ietf:params:jmap:blob` and `urn:ietf:params:jmap:blob2`
+in the `using` array of the same request.  The blob2 capability
 supersedes the blob capability and does not depend on it.
 
 The value of this property in the JMAP session "capabilities"
@@ -119,7 +119,11 @@ on server capabilities and permissions for that account:
     Data Types" registry.  If the array is empty, the server does
     not support Blob/lookup.  Servers MAY include private type names
     not in the registry; clients MUST ignore names they do not
-    recognise.
+    recognise.  Clients MUST also ignore names that they do
+    recognise if the corresponding capability for that type name
+    is not present in the 'capabilities' section of the session
+    object, because that means that the name has been used as a
+    private type rather than a capability that the client knows.
 
 * supportedDigestAlgorithms: "String[]"
 
@@ -127,6 +131,20 @@ on server capabilities and permissions for that account:
     IANA "Hash Function Textual Names" registry, expressed in
     lowercase (e.g., "sha", "sha-256").  Clients SHOULD prefer
     algorithms listed earlier in the array.
+
+* uploadUrl: "String\|null"
+
+    A URI template (optionally containing `{accountId}`) for
+    uploading blobs via HTTP POST for this account, in the same
+    format as the session-level `uploadUrl` defined in
+    {{JMAP-CORE}}, Section 2.  Servers MUST still provide the
+    session-level `uploadUrl`; this per-account URL is an
+    alternative that MAY point to a different server or be more
+    efficient for this account.  Uploads to this URL return a JSON
+    object with the same properties as the session-level upload
+    response, plus an `expires` property as defined in "The expires
+    Response Property" below.  If null, clients SHOULD use the
+    session-level `uploadUrl`.
 
 * chunkSize: "UnsignedInt\|null"
 
@@ -153,10 +171,9 @@ on server capabilities and permissions for that account:
 
 * supportedArchiveTypes: "String[]\|null"
 
-    The archive MIME types supported for creating archives via
-    ArchiveRecipe.  Defined values are "application/zip",
-    "application/x-tar", and "application/x-cpio".  If null,
-    the server does not support archive creation.
+    The archive media types ({{MEDIA-TYPES}}) supported for creating
+    archives via ArchiveRecipe.  If null, the server does not support
+    archive creation.
 
 * supportedExtractTypes: "String[]\|null"
 
@@ -167,11 +184,9 @@ on server capabilities and permissions for that account:
 
 * supportedCompressTypes: "String[]\|null"
 
-    The compression MIME types supported for compressing via
-    CompressRecipe.  Defined values are "application/gzip",
-    "application/x-bzip2", "application/x-xz", and
-    "application/zstd".  If null, the server does not support
-    compression.
+    The compression media types ({{MEDIA-TYPES}}) supported for
+    compressing via CompressRecipe.  If null, the server does not
+    support compression.
 
 * supportedDecompressTypes: "String[]\|null"
 
@@ -182,11 +197,9 @@ on server capabilities and permissions for that account:
 
 * supportedDeltaTypes: "String[]\|null"
 
-    The delta media types supported for computing deltas via
-    DeltaRecipe.  Defined values are
-    "application/x-rdiff-delta", "application/x-bsdiff", and
-    "text/x-diff" (unified diff).  If null, the server does
-    not support delta computation.
+    The delta media types ({{MEDIA-TYPES}}) supported for computing
+    deltas via DeltaRecipe.  If null, the server does not support
+    delta computation.
 
 * supportedPatchTypes: "String[]\|null"
 
@@ -223,11 +236,12 @@ on server capabilities and permissions for that account:
 
 ~~~json
 {
-  "urn:ietf:params:jmap:blobext": {
+  "urn:ietf:params:jmap:blob2": {
     "maxSizeBlobSet": 52428800,
     "maxDataSources": 64,
     "supportedTypeNames": ["Email", "Thread", "Mailbox"],
     "supportedDigestAlgorithms": ["sha-256", "sha"],
+    "uploadUrl": "https://upload.example.com/jmap/upload/{accountId}/",
     "chunkSize": 5242880,
     "supportedImageReadTypes": [
       "image/png",
@@ -340,41 +354,32 @@ provided value does not match the actual data.
 
 # Blob/set
 
-Blob/set is defined under the `urn:ietf:params:jmap:blobext` capability
+Blob/set is defined under the `urn:ietf:params:jmap:blob2` capability
 and requires that capability in the request's `using` array.
 
-This method creates, touches, and destroys blobs.  Unlike a typical
-Foo/set method, blobs do not have a state string, so Blob/set does
-not accept `ifInState` and does not return `oldState` or `newState`
-in the response.
+This method creates, touches, and destroys blobs.  It is a standard
+Foo/set method ({{JMAP-CORE}}, Section 5.3) with the following
+blob-specific behaviours:
 
-The method takes the following arguments:
+* create: "Id\[BlobCreateObject\]\|null"
 
-* accountId: "Id"
+    A map of a creation id to a BlobCreateObject describing the blob
+    to create, or null if no blobs are to be created.
 
-    The id of the account to use.
+* update: A map of blobId to a patch object.  The only property a
+  client can request to change is `expires`; all other properties can
+  only be set to their existing values.  The server can honour the
+  requested `expires` (by not returning an `expires` in the updated
+  BlobObject) or return a different `expires` value if it applied a
+  different lifetime.  The purpose of update is to "touch" the blob,
+  refreshing its lifetime on the server.  If the blobId does not
+  exist, it MUST be reported in a `notUpdated` map with a "notFound"
+  SetError.
 
-* create: "Id\[UploadObject\]\|null" (default: null)
+* destroy: The server MUST reject any blob that is still referenced
+  by another object with a "blobHasReference" SetError.
 
-    A map of creation id (an arbitrary string set by the client) to
-    UploadObjects.
-
-* update: "Id\[Object\]\|null" (default: null)
-
-    A map of blobId to an empty object.  No properties may be set
-    on a blob; the purpose of update is to "touch" the blob,
-    refreshing its lifetime on the server.  If the blobId does not
-    exist, it MUST be reported in a `notUpdated` map with a
-    "notFound" SetError.
-
-* destroy: "Id[]\|null" (default: null)
-
-    An array of blobIds to destroy.  The server MUST reject any
-    blob that is still referenced by another object with a
-    "blobHasReference" SetError.  If the blobId does not exist,
-    the server MUST return a "notFound" SetError.
-
-An UploadObject has the following properties:
+An BlobCreateObject has the following properties:
 
 * data: "DataSourceObject[]"
 
@@ -405,47 +410,11 @@ invalid (e.g., contains non-UTF-8 data in `data:asText` or invalid
 base64 in `data:asBase64`).  It MUST reject the creation and return a
 "notCreated" response for that creation id.
 
-The response to Blob/set contains the following:
-
-* accountId: "Id"
-
-    The id of the account used for the operation.
-
-* created: "Id\[BlobObject\]\|null"
-
-    A map of creation id to BlobObject for each successfully created
-    blob.  This is null (or omitted) if no blobs were created.
-
-* notCreated: "Id\[SetError\]\|null"
-
-    A map of creation id to a SetError for each blob that failed to
-    be created.  This is null (or omitted) if all creations were
-    successful.
-
-* updated: "Id\[BlobObject\|null\]\|null"
-
-    A map of blobId to a BlobObject (or null if no response
-    properties changed) for each successfully touched blob.
-    The BlobObject MAY include an `expires` property with the new
-    expiry time.  This is null (or omitted) if no update was
-    requested or all failed.
-
-* notUpdated: "Id\[SetError\]\|null"
-
-    A map of blobId to a SetError for each blob that failed to be
-    updated.  This is null (or omitted) if all updates were
-    successful.
-
-* destroyed: "Id[]\|null"
-
-    An array of blobIds that were successfully destroyed.  This is
-    null (or omitted) if no blobs were destroyed.
-
-* notDestroyed: "Id\[SetError\]\|null"
-
-    A map of blobId to a SetError for each blob that failed to be
-    destroyed.  This is null (or omitted) if all destroys were
-    successful.
+The response is a standard Foo/set response.  The objects in the
+`created` and `updated` maps are BlobObjects.  If an update set a
+new `expires`, the server returns a BlobObject with the actual
+`expires` that was applied; if the server accepted the requested
+value it need not return an `expires` in the BlobObject.
 
 A BlobObject has the following properties:
 
@@ -465,14 +434,9 @@ A BlobObject has the following properties:
 
     See "The expires Response Property" below.
 
-For each successful creation, the server MUST add an entry to the
-`createdIds` map in the response, mapping the creation id to the
-blobId.  This allows later methods in the same Request Object to
-reference the created blob via a backreference.
-
 # Blob/get
 
-Blob/get is defined under the `urn:ietf:params:jmap:blobext` capability
+Blob/get is defined under the `urn:ietf:params:jmap:blob2` capability
 and requires that capability in the request's `using` array.
 
 This method retrieves blob data.  It is a standard Foo/get method
@@ -612,7 +576,7 @@ The response also contains:
 
 # Blob/lookup
 
-Blob/lookup is defined under the `urn:ietf:params:jmap:blobext`
+Blob/lookup is defined under the `urn:ietf:params:jmap:blob2`
 capability and requires that capability in the request's `using`
 array.
 
@@ -682,7 +646,7 @@ or an Email) before it expires.
 
 # Blob/convert
 
-Blob/convert is defined under the `urn:ietf:params:jmap:blobext`
+Blob/convert is defined under the `urn:ietf:params:jmap:blob2`
 capability and requires that capability in the request's `using`
 array.
 
@@ -831,9 +795,8 @@ An ArchiveRecipe creates an archive blob from a list of entries.
 It is an object with the following properties:
 
 * type: "String"
-  The MIME type of the archive to create.  MUST be one of the values
-  in the server's `supportedArchiveTypes` capability.  Defined values
-  are "application/zip", "application/x-tar", and "application/x-cpio".
+  The media type ({{MEDIA-TYPES}}) of the archive to create.  MUST be
+  one of the values in the server's `supportedArchiveTypes` capability.
 * entries: "ArchiveEntry[]"
   An array of ArchiveEntry objects describing the contents of the
   archive.
@@ -1005,10 +968,9 @@ algorithm.  It is an object with the following properties:
 * blobId: "BlobId"
   The blobId of the data to compress.
 * type: "String"
-  The MIME type of the compression format to use.  MUST be one of the
-  values in the server's `supportedCompressTypes` capability.
-  Defined values are "application/gzip", "application/x-bzip2",
-  "application/x-xz", and "application/zstd".
+  The media type ({{MEDIA-TYPES}}) of the compression format to use.
+  MUST be one of the values in the server's `supportedCompressTypes`
+  capability.
 * level: "UnsignedInt\|null"
   The compression level, where higher values produce smaller output
   at the cost of more CPU time.  If null, the server uses the
@@ -1541,11 +1503,11 @@ as the inputs.
 
 # IANA Considerations
 
-## JMAP Capability Registration for urn:ietf:params:jmap:blobext
+## JMAP Capability Registration for urn:ietf:params:jmap:blob2
 
 IANA is requested to register the "Blob Management" Capability as follows:
 
-Capability Name: urn:ietf:params:jmap:blobext
+Capability Name: urn:ietf:params:jmap:blob2
 
 Intended use: common
 
@@ -1630,6 +1592,17 @@ The source of this document exists on github at: https://github.com/brong/draft-
 
 **draft-ietf-jmap-blobext-01**
 
+* Added per-account `uploadUrl` capability property, allowing
+  servers to direct uploads for individual accounts to a different
+  endpoint.  Uploads to this URL return an `expires` property in
+  addition to the standard upload response fields.
+* Blob/set is now a standard Foo/set method with state strings
+  (ifInState/oldState/newState).  Renamed UploadObject to
+  BlobCreateObject.  The `expires` property can be set via update.
+* Removed hardcoded type value lists from normative text (supportedArchiveTypes,
+  supportedCompressTypes, supportedDeltaTypes, ArchiveRecipe, CompressRecipe).
+  Values are now described as media types per {{MEDIA-TYPES}}.  Format-specific
+  considerations subsections remain as informative examples.
 * Obsoletes RFC9404: incorporated all content from RFC9404 into
   this document, making it self-contained.
 * Renamed Blob/upload to Blob/set, making it a standard Foo/set
@@ -1721,6 +1694,8 @@ The source of this document exists on github at: https://github.com/brong/draft-
 
 # Acknowledgements
 
-TODO
+The authors would like to thank Mauro De Gennaro, Ben Bucksch,
+Ricardo Signes, and the members of the JMAP Working Group at the
+IETF for their contributions and feedback.
 
 {backmatter}
