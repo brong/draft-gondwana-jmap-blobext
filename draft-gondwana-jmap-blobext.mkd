@@ -1,7 +1,7 @@
 ---
 title: JMAP Blob Management
 abbrev: JMAP Blob
-docname: draft-ietf-jmap-blobext-01
+docname: draft-ietf-jmap-blobext-02
 submissionType: IETF
 category: std
 updates: 8620
@@ -337,7 +337,12 @@ present in the same DataSourceObject.
 
     The byte offset of the start of this data source within the
     outer (containing) blob.  Only meaningful in the `chunks` array
-    of a Blob/get response.
+    of a Blob/get response.  This value is redundant with the sum of
+    the `length` values of the preceding chunks, but it allows a
+    client to locate the chunk covering a particular byte range
+    without fetching or summing every earlier chunk, and when a
+    DataSourceObject is reused in Blob/set it acts as a consistency
+    check that the chunk is being placed where the client expects.
 
 A DataSourceObject in the `chunks` array of a Blob/get response MAY
 also include `digest:*` properties (e.g. `digest:sha-256`) when
@@ -459,7 +464,8 @@ arguments, Blob/get accepts:
 * dataSourceProperties: "String[]" (default: \["blobId", "size"\])
 
     If supplied, only the properties listed in the array are returned
-    for each DataSourceObject in the `chunks` array.  Available
+    for each DataSourceObject in the `chunks` array.  This argument
+    has no effect unless `chunks` is included in `properties`.  Available
     properties include `blobId`, `size`, `offset`, `length`,
     `position`, and `digest:*` values where `*` is a hash algorithm
     name from the IANA "Hash Function Textual Names" registry (e.g.
@@ -530,6 +536,14 @@ The requestable properties in the `properties` array are:
       is read-only — it reflects the metadata stored in the
       blob content and is not a user-editable property.
 
+* chunks
+
+    An array of DataSourceObjects describing the internal chunk
+    structure of the blob (see below).  Only returned if explicitly
+    requested in `properties`.  The properties returned for each
+    DataSourceObject are controlled by the `dataSourceProperties`
+    argument.
+
 If neither `offset` nor `length` are specified (i.e., both null),
 the default properties are `data` and `size`.  Otherwise, the client
 MUST specify the `properties` to return.
@@ -555,14 +569,20 @@ object contains the requested properties plus:
 
 * chunks: "DataSourceObject[]"
 
-    An array of one or more data source objects describing the
-    internal chunk structure of the blob.  The blob is reconstructed
-    by concatenating the data from each data source object in the
+    Present only if `chunks` was requested in `properties`.  An
+    array of one or more data source objects describing the internal
+    chunk structure of the blob.  The blob is reconstructed by
+    concatenating the data from each data source object in the
     listed order.  The client MUST use the `offset` and `length`
     of each DataSourceObject to determine which octets to read from
     each chunk's underlying blob.
 
-    This property MUST be explicitly requested in `properties`.
+    A server that does not store the blob in chunks returns
+    a single DataSourceObject covering the entire blob, with
+    `blobId` set to the blob's own id, `offset` 0, `length` and
+    `size` equal to the size of the blob, and `position` 0.  This
+    allows clients to process the `chunks` array the same way
+    regardless of how the server stores blobs.
 
 The response also contains:
 
@@ -1142,6 +1162,7 @@ and SHA-256 digests:
 [["Blob/get", {
   "accountId": "abc",
   "ids": ["B1a2b3c"],
+  "properties": ["size", "chunks"],
   "dataSourceProperties": [
     "blobId", "size", "offset", "length", "position",
     "digest:sha-256"
@@ -1183,6 +1204,45 @@ The response shows the blob is stored as two chunks:
 The `position` values show where each chunk fits in the assembled
 blob, and the `digest:sha-256` values can be used to verify chunk
 integrity.
+
+## Looking Up Blob References
+
+This example finds which Mailbox and Email objects reference two
+blobs:
+
+~~~json
+[["Blob/lookup", {
+  "accountId": "abc",
+  "typeNames": ["Mailbox", "Email"],
+  "ids": ["Bfirst", "Bsecond"]
+}, "0"]]
+~~~
+
+The response shows that the first blob is referenced by two emails
+in the same mailbox, and the second blob is not referenced by any
+objects of the requested types (or is not visible to the user):
+
+~~~json
+[["Blob/lookup", {
+  "accountId": "abc",
+  "list": [
+    {
+      "id": "Bfirst",
+      "matchedIds": {
+        "Mailbox": ["M1"],
+        "Email": ["E1", "E2"]
+      }
+    },
+    {
+      "id": "Bsecond",
+      "matchedIds": {
+        "Mailbox": [],
+        "Email": []
+      }
+    }
+  ]
+}, "0"]]
+~~~
 
 ## Creating a Zip Archive
 
@@ -1590,6 +1650,16 @@ EDITOR: please remove this section before publication.
 
 The source of this document exists on github at: https://github.com/brong/draft-gondwana-jmap-blobext/
 
+**draft-ietf-jmap-blobext-02**
+
+* Listed `chunks` as a requestable Blob/get property and fixed the
+  chunks example to request it.
+* Explained the purpose of the DataSourceObject `position` property.
+* Servers that do not store blobs in chunks return a single chunk
+  covering the whole blob.
+* Added a Blob/lookup example.
+* Extended acknowledgements.
+
 **draft-ietf-jmap-blobext-01**
 
 * Added per-account `uploadUrl` capability property, allowing
@@ -1695,7 +1765,8 @@ The source of this document exists on github at: https://github.com/brong/draft-
 # Acknowledgements
 
 The authors would like to thank Mauro De Gennaro, Ben Bucksch,
-Ricardo Signes, and the members of the JMAP Working Group at the
+Ricardo Signes, Neil Jenkins, Ken Murchison, Arnt Gulbrandsen,
+Seph Gentle, Matthew Horsfall, and the members of the JMAP Working Group at the
 IETF for their contributions and feedback.
 
 {backmatter}
