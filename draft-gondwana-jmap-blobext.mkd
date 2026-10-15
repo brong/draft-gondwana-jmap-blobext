@@ -1,7 +1,7 @@
 ---
 title: JMAP Blob Management
 abbrev: JMAP Blob
-docname: draft-ietf-jmap-blobext-02
+docname: draft-ietf-jmap-blobext-03
 submissionType: IETF
 category: std
 updates: 8620
@@ -26,6 +26,7 @@ normative:
 
 
 informative:
+    IANA-POLICY: RFC8126
 
 --- abstract
 
@@ -1643,12 +1644,30 @@ Reference: this document
 
 IANA is requested to update the reference for the "JMAP Data Types"
 registry to this document (replacing the reference to RFC9404).
+The registration policy and instructions to the designated experts
+below are carried forward unchanged from RFC9404, so that they
+remain defined in a current document.
+
+The registration policy for this registry is "Specification
+Required" {{IANA-POLICY}}.  Either an RFC or a similarly stable reference
+document defines a JMAP Data Type and associated capability.
+
+IANA will appoint designated experts to review requests for
+additions to this registry, with guidance to allow any registration
+that provides a stable document describing the capability and
+control over the URI namespace to which the capability URI points.
 
 # Changes
 
 EDITOR: please remove this section before publication.
 
 The source of this document exists on github at: https://github.com/brong/draft-gondwana-jmap-blobext/
+
+**draft-ietf-jmap-blobext-03**
+
+* Restated the registration policy and designated expert guidance
+  for the "JMAP Data Types" registry, so they are not left only in
+  the obsoleted RFC9404.
 
 **draft-ietf-jmap-blobext-02**
 
