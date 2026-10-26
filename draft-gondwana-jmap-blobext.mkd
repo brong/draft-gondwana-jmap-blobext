@@ -400,6 +400,29 @@ An BlobCreateObject has the following properties:
     download of the blob, but is not required to.  The server MAY
     infer the type itself and override the client's hint.
 
+* size: "UnsignedInt\|null" (default: null)
+
+    The size in octets of the blob being created: the total of the
+    octets contributed by all the DataSourceObjects.  If given, the
+    server MUST reject the creation with an "invalidProperties"
+    SetError if the resulting blob is a different size.
+
+* digest:\<algorithm\>: "String\|null" (default: null)
+
+    The base64-encoded digest of the whole blob being created,
+    computed with the named algorithm, as returned by Blob/get.  A
+    client MAY give any number of these.  The server MUST verify each
+    one against the resulting blob, and if any does not match, MUST
+    reject the creation with an "invalidProperties" SetError and MUST
+    NOT create the blob.  A server MUST reject a digest whose
+    algorithm is not in its `supportedDigestAlgorithms` capability
+    with an "invalidProperties" SetError, so that a client never
+    believes an unchecked blob was verified.
+
+    This lets a client that uploaded content in several pieces, or
+    sent it inline, confirm in the same call that the server holds
+    exactly the bytes it meant to send, without a further Blob/get.
+
 * noPersist: "Boolean" (default: false)
 
     If true, the resulting blob is ephemeral: it may be referenced
@@ -1665,6 +1688,11 @@ The source of this document exists on github at: https://github.com/brong/draft-
 
 **draft-ietf-jmap-blobext-03**
 
+* Added optional `size` and `digest:<algorithm>` properties to the
+  BlobCreateObject, checked against the whole blob being created, so
+  a client can verify an assembled or inline upload in the same
+  call.  (RFC9404 defined neither; per-source values were already
+  checked on each DataSourceObject.)
 * Restated the registration policy and designated expert guidance
   for the "JMAP Data Types" registry, so they are not left only in
   the obsoleted RFC9404.
