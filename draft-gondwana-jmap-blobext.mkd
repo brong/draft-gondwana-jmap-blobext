@@ -27,6 +27,7 @@ normative:
 
 informative:
     IANA-POLICY: RFC8126
+    JMAP-MAIL: RFC8621
 
 --- abstract
 
@@ -439,6 +440,13 @@ invalid (e.g., contains non-UTF-8 data in `data:asText` or invalid
 base64 in `data:asBase64`).  It MUST reject the creation and return a
 "notCreated" response for that creation id.
 
+Inline data (`data:asText` and `data:asBase64`) is part of the JMAP
+request, so it counts towards the server's `maxSizeRequest` limit
+({{JMAP-CORE}}, Section 2), and base64 makes it about a third larger
+than the octets it carries.  Clients SHOULD consider using the upload
+endpoint ({{JMAP-CORE}}, Section 6.1) for blobs larger than a
+megabyte, and referencing the uploaded blob by `blobId`.
+
 The response is a standard Foo/set response.  The objects in the
 `created` and `updated` maps are BlobObjects.  If an update set a
 new `expires`, the server returns a BlobObject with the actual
@@ -515,14 +523,20 @@ The requestable properties in the `properties` array are:
 
 * digest:\<algorithm\>
 
-    The base64-encoded digest of the selected range, computed using
-    the named algorithm.  The algorithm name MUST appear in the
-    server's `supportedDigestAlgorithms` capability.
+    The base64-encoded digest of the octets in the selected range,
+    computed using the named algorithm: exactly the octets that a
+    `data` property would return.  If the range extends past the end
+    of the blob, that is the octets from `offset` to the end, or no
+    octets if `offset` is past the end.  The algorithm name MUST
+    appear in the server's `supportedDigestAlgorithms` capability.
 
 * size
 
     The total size of the blob in octets, regardless of the range
-    selected.
+    selected.  Servers SHOULD store the size of a blob in a form that
+    is cheap to read, and clients SHOULD request only `size` when
+    that is all they need, since fetching blob content can be much
+    more expensive for the server.
 
 * imageData
 
@@ -589,7 +603,9 @@ object contains the requested properties plus:
     Set to true if the selected range extends past the end of the
     blob.  In this case, only the bytes from `offset` to the end of
     the blob (or an empty string if `offset` is past the end) are
-    returned.
+    returned.  A null `length` selects everything from `offset` to
+    the end, so it sets `isTruncated` only if `offset` is past the
+    end of the blob.
 
 * chunks: "DataSourceObject[]"
 
@@ -627,6 +643,17 @@ array.
 This method provides a reverse lookup: given a set of blobIds, it
 returns which objects of specified data types reference those blobs.
 
+Since different data types have different semantics of "contains",
+the definition of "reference" is somewhat loose, but roughly means
+"you could discover this blobId by looking at this object or at
+other objects recursively contained within this object".  For
+example, with a server that supports {{JMAP-MAIL}}, if any Email in
+a Mailbox references a blob, then that Mailbox references the
+blob, and any Thread containing such an Email references it too.
+This does not work the other way: an Email that references a
+Mailbox in its `mailboxIds` does not thereby reference the blobs of
+other Emails in that Mailbox.
+
 The method takes the following arguments:
 
 * accountId: "Id"
@@ -636,7 +663,9 @@ The method takes the following arguments:
 * typeNames: "String[]"
 
     A list of data type names to search.  Only type names listed in
-    the server's `supportedTypeNames` capability are valid.  If a
+    the server's `supportedTypeNames` capability, and whose "JMAP
+    Data Types" registry entry has "Can Reference Blobs" set to
+    "Yes" (or private types defined to reference blobs), are valid.  If a
     type name is not known by the server or the associated capability
     has not been requested in `using`, the server MUST return an
     "unknownDataType" error.
@@ -668,6 +697,10 @@ Access control: if a blob is not visible to the authenticated user or
 does not exist on the server at all, the server MUST still return an
 empty array for each type name.  This ensures that the response does
 not reveal whether the blob exists but is inaccessible to the user.
+Likewise, the server MUST NOT return the id of an object that the
+user could not discover by querying.  For example, if an Email that
+references the blob is in a Mailbox the user cannot see, that Email's
+id MUST NOT appear in `matchedIds`.
 
 # The "expires" Response Property
 
@@ -1540,6 +1573,18 @@ data:asBase64) MUST NOT assume that the server will accept all
 possible values.  Servers MUST reject malformed inputs as specified
 in the DataSourceObject definition.
 
+JSON parsers are not all consistent in handling non-UTF-8 data, and
+JMAP requires all JSON to be UTF-8, so a server MUST return null for
+`data:asText` (setting `isEncodingProblem`) rather than return octets
+that are not valid UTF-8.
+
+The server MUST NOT trust that the data given to Blob/set is a
+well-formed instance of its stated media type.  If the server parses
+a blob — to convert it, extract an archive, or read image metadata
+— it SHOULD only use hardened parsers designed to deal with
+arbitrary untrusted data.  The server SHOULD NOT reject data on the
+grounds that it is not a valid specimen of the stated type.
+
 ## Resource Consumption
 
 Several operations defined in this document can consume significant
@@ -1554,6 +1599,12 @@ these limits with a "tooLarge" or "serverFail" error as appropriate.
 
 Image conversion can also consume significant resources, especially
 for very large images or high output dimensions.
+
+Digest algorithms can be expensive to calculate over large blobs.
+Servers that share resources between users SHOULD track resource use
+by clients and rate-limit expensive operations, such as computing
+digests in Blob/get or verifying them in Blob/set, to avoid
+resource starvation.
 
 Delta and patch operations can also be resource-intensive,
 particularly for large blobs.  Servers SHOULD impose limits on the
@@ -1581,9 +1632,13 @@ with ".." path components.
 
 The ability to split content into multiple blobs, recombine them via
 Blob/set, and apply delta patches may be used to bypass security
-scanners that inspect blob content.  Servers that perform content
-scanning SHOULD scan the output of Blob/convert operations as well
-as the inputs.
+scanners that inspect blob content: carefully chosen data sources
+can recreate dangerous content on the far side of a scanner watching
+the upload endpoint.  Servers that perform content scanning SHOULD
+provide a hook to scan the blob that results from concatenating the
+data sources in Blob/set, in the same way as blobs arriving through
+the upload endpoint, and SHOULD scan the output of Blob/convert
+operations as well as the inputs.
 
 # IANA Considerations
 
@@ -1688,6 +1743,14 @@ The source of this document exists on github at: https://github.com/brong/draft-
 
 **draft-ietf-jmap-blobext-03**
 
+* Carried over from RFC9404 what this document had lost: Blob/lookup
+  does not return ids of objects the user cannot discover, the
+  meaning of "reference" and the "Can Reference Blobs" restriction,
+  the server's handling of untrusted blob data, scanning of
+  concatenated blobs, the cost of digests, the request size limit
+  for inline data, and the hints about fetching `size`.
+* A Blob/get digest is over exactly the octets returned for the
+  range, including when the range runs past the end of the blob.
 * Added optional `size` and `digest:<algorithm>` properties to the
   BlobCreateObject, checked against the whole blob being created, so
   a client can verify an assembled or inline upload in the same
