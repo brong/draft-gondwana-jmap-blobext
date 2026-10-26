@@ -132,17 +132,18 @@ on server capabilities and permissions for that account:
     An array of digest algorithms supported for Blob/get and for
     checking digests in Blob/set, from the IANA "Hash Algorithms for
     HTTP Digest Fields" registry {{DIGEST-FIELDS}}, expressed in
-    lowercase (e.g., "sha-256", "sha").  Clients SHOULD prefer
-    algorithms listed earlier in the array.
+    lowercase (e.g., "sha-256", "sha").
 
-    Servers SHOULD support "sha-256" and list it ahead of any
-    algorithm that registry marks as deprecated, and clients SHOULD
-    use "sha-256" when the server supports it.  Servers MAY also
-    support deprecated algorithms, in particular "sha" (SHA-1), which
-    RFC9404 servers and clients commonly use; SHA-1 is vulnerable to
-    collision attacks, so clients relying on a digest to detect
-    deliberate tampering, rather than accidental corruption, SHOULD
-    NOT use it.
+    The server lists the algorithms in its order of preference, and
+    SHOULD only list ones it can compute efficiently: a server that
+    stores a digest of each blob, for example, can return that one
+    without reading the blob.  Clients SHOULD use the first algorithm
+    in the list that they support.  An algorithm the registry marks
+    as deprecated, such as "sha" (SHA-1), which RFC9404 servers and
+    clients commonly use, MAY still be listed.  SHA-1 is vulnerable to
+    collision attacks: it detects accidental corruption, but a client
+    relying on a digest to detect deliberate tampering SHOULD NOT use
+    it.
 
 * uploadUrl: "String\|null"
 
@@ -1762,9 +1763,10 @@ The source of this document exists on github at: https://github.com/brong/draft-
 * Digest algorithm names come from the "Hash Algorithms for HTTP
   Digest Fields" registry of RFC9530 (which replaces the RFC3230
   registry RFC9404 used), not the "Hash Function Textual Names"
-  registry, where SHA-1 is "sha-1".  Servers SHOULD support
-  "sha-256" and clients SHOULD use it; "sha" (deprecated there)
-  remains allowed for compatibility.
+  registry, where SHA-1 is "sha-1".  Servers list algorithms in
+  their order of preference, only ones they can compute efficiently,
+  and clients use the first they support; "sha" (deprecated there)
+  remains allowed.
 * A Blob/get digest is over exactly the octets returned for the
   range, including when the range runs past the end of the blob.
 * Added optional `size` and `digest:<algorithm>` properties to the
