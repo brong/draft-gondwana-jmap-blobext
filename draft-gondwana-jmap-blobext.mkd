@@ -28,6 +28,14 @@ normative:
 informative:
     IANA-POLICY: RFC8126
     JMAP-MAIL: RFC8621
+    JMAP-BLOB: RFC9404
+    EXIF:
+      title: "Exchangeable image file format for digital still cameras: Exif Version 3.0"
+      author:
+        - org: Camera & Imaging Products Association
+      date: 2023-05
+      seriesinfo:
+        CIPA: DC-008-2023
 
 --- abstract
 
@@ -88,7 +96,7 @@ in one or more "accountCapabilities" properties MUST also include it
 in the "capabilities" property.
 
 A server MAY also advertise `urn:ietf:params:jmap:blob` (as defined
-in RFC9404) to support older clients, but a client MUST NOT include
+in {{JMAP-BLOB}}) to support older clients, but a client MUST NOT include
 both `urn:ietf:params:jmap:blob` and `urn:ietf:params:jmap:blob2`
 in the `using` array of the same request.  The blob2 capability
 supersedes the blob capability and does not depend on it.
@@ -104,15 +112,17 @@ on server capabilities and permissions for that account:
 
     The maximum size of a blob (in octets) that the server will
     allow to be created (including blobs created by concatenating
-    multiple data sources together).  If null, the server does not
-    advertise a specific limit but MAY still reject blobs that are
-    too large.
+    multiple data sources together).  A creation that would exceed
+    it is rejected with a "tooLarge" SetError.  If null, the server
+    does not advertise a specific limit but MAY still reject blobs
+    that are too large.
 
 * maxDataSources: "UnsignedInt"
 
     The maximum number of DataSourceObjects allowed in the `data`
     array of a single creation in Blob/set.  Servers MUST support
-    at least 64 DataSourceObjects per creation.
+    at least 64 DataSourceObjects per creation.  A creation with
+    more is rejected with a "tooLarge" SetError.
 
 * supportedTypeNames: "String[]"
 
@@ -139,7 +149,7 @@ on server capabilities and permissions for that account:
     stores a digest of each blob, for example, can return that one
     without reading the blob.  Clients SHOULD use the first algorithm
     in the list that they support.  An algorithm the registry marks
-    as deprecated, such as "sha" (SHA-1), which RFC9404 servers and
+    as deprecated, such as "sha" (SHA-1), which {{JMAP-BLOB}} servers and
     clients commonly use, MAY still be listed.  SHA-1 is vulnerable to
     collision attacks: it detects accidental corruption, but a client
     relying on a digest to detect deliberate tampering SHOULD NOT use
@@ -190,7 +200,7 @@ on server capabilities and permissions for that account:
 
 * supportedExtractTypes: "String[]\|null"
 
-    The archive MIME types supported for extracting archives via
+    The archive media types supported for extracting archives via
     ExtractRecipe.  This MAY include types not in
     `supportedArchiveTypes` (e.g., "application/vnd.ms-tnef").
     If null, the server does not support archive extraction.
@@ -203,7 +213,7 @@ on server capabilities and permissions for that account:
 
 * supportedDecompressTypes: "String[]\|null"
 
-    The compression MIME types supported for decompressing via
+    The compression media types supported for decompressing via
     DecompressRecipe.  This MAY include types not in
     `supportedCompressTypes`.  If null, the server does not
     support decompression.
@@ -309,15 +319,11 @@ present in the same DataSourceObject.
 
 * data:asText: "String\|null"
 
-    The data represented as a UTF-8 string.  The server MUST reject
-    the creation with a "notCreated" response if the value is not
-    valid UTF-8.
+    The data represented as a UTF-8 string.
 
 * data:asBase64: "String\|null"
 
-    The data encoded as base64 ({{BASE64}}).  The server MUST reject
-    the creation with a "notCreated" response if the value is not
-    valid base64.
+    The data encoded as base64 ({{BASE64}}).
 
 * blobId: "BlobId"
 
@@ -328,17 +334,12 @@ present in the same DataSourceObject.
 
     The offset (in octets) within the data source from which to
     start copying.  If null, defaults to 0 (the start of the data
-    source).  If the range cannot be fully satisfied (i.e., it
-    begins or extends past the end of the data), the DataSourceObject
-    is invalid and the creation MUST be rejected with a "notCreated"
-    response.
+    source).
 
 * length: "UnsignedInt\|null"
 
     The number of octets to copy from the data source.  If null,
-    copy from `offset` to the end of the data source.  If the range
-    cannot be fully satisfied, the DataSourceObject is invalid and
-    the creation MUST be rejected with a "notCreated" response.
+    copy from `offset` to the end of the data source.
 
 * size: "UnsignedInt\|null"
 
@@ -365,10 +366,17 @@ chunk contributes to the blob (i.e. after applying `offset` and
 `length`).
 
 When a server provides `size`, `position`, or `digest:*` values in
-a Blob/get response, it MUST calculate them correctly.  When a
-DataSourceObject containing `size`, `position`, or `digest:*` values
-is used in Blob/set, the server MUST reject the object if any
-provided value does not match the actual data.
+a Blob/get response, it MUST calculate them correctly.
+
+A DataSourceObject used in Blob/set is invalid if `data:asText` is
+not valid UTF-8, if `data:asBase64` is not valid base64, if the range
+given by `offset` and `length` begins or extends past the end of the
+data, or if any `size`, `position`, or `digest:*` value it contains
+does not match the actual data.  The server MUST NOT guess the
+user's intent: it MUST reject the creation with an
+"invalidProperties" SetError whose `properties` is \["data"\].  If
+a `blobId` does not exist, or the user cannot access it, the server
+MUST reject the creation with a "notFound" SetError.
 
 # Blob/set
 
@@ -378,6 +386,12 @@ and requires that capability in the request's `using` array.
 This method creates, touches, and destroys blobs.  It is a standard
 Foo/set method ({{JMAP-CORE}}, Section 5.3) with the following
 blob-specific behaviours:
+
+* Blobs have no state, as in {{JMAP-BLOB}}: Blob/get returns no
+  state string, and there is no Blob/changes method.  Blob/set does
+  not take an `ifInState` argument, and a non-null value is rejected
+  with an "invalidArguments" error.  Unlike other Foo/set methods,
+  the response has `oldState` and `newState` both null.
 
 * create: "Id\[BlobCreateObject\]\|null"
 
@@ -397,7 +411,7 @@ blob-specific behaviours:
 * destroy: The server MUST reject any blob that is still referenced
   by another object with a "blobHasReference" SetError.
 
-An BlobCreateObject has the following properties:
+A BlobCreateObject has the following properties:
 
 * data: "DataSourceObject[]"
 
@@ -446,11 +460,6 @@ An BlobCreateObject has the following properties:
     This allows servers to optimise pipelines where intermediate
     blobs are never needed after the request completes.
 
-The server MUST NOT guess the user's intent when a DataSourceObject is
-invalid (e.g., contains non-UTF-8 data in `data:asText` or invalid
-base64 in `data:asBase64`).  It MUST reject the creation and return a
-"notCreated" response for that creation id.
-
 Inline data (`data:asText` and `data:asBase64`) is part of the JMAP
 request, so it counts towards the server's `maxSizeRequest` limit
 ({{JMAP-CORE}}, Section 2), and base64 makes it about a third larger
@@ -458,7 +467,8 @@ than the octets it carries.  Clients SHOULD consider using the upload
 endpoint ({{JMAP-CORE}}, Section 6.1) for blobs larger than a
 megabyte, and referencing the uploaded blob by `blobId`.
 
-The response is a standard Foo/set response.  The objects in the
+Apart from `oldState` and `newState`, the response is a standard
+Foo/set response.  The objects in the
 `created` and `updated` maps are BlobObjects.  If an update set a
 new `expires`, the server returns a BlobObject with the actual
 `expires` that was applied; if the server accepted the requested
@@ -474,9 +484,10 @@ A BlobObject has the following properties:
 
     The media type of the blob, or null if unknown.
 
-* size: "UnsignedInt"
+* size: "UnsignedInt\|null"
 
-    The size of the blob in octets.
+    The size of the blob in octets, or null if the server has not yet
+    generated a Blob/convert result (see "Blob/convert").
 
 * expires: "UTCDate\|null"
 
@@ -504,7 +515,7 @@ arguments, Blob/get accepts:
     The number of bytes to return.  If null, returns all bytes from
     `offset` to the end of the blob.
 
-* dataSourceProperties: "String[]" (default: \["blobId", "size"\])
+* dataSourceProperties: "String[]" (default: \["blobId", "offset", "length"\])
 
     If supplied, only the properties listed in the array are returned
     for each DataSourceObject in the `chunks` array.  This argument
@@ -538,8 +549,7 @@ The requestable properties in the `properties` array are:
     computed using the named algorithm: exactly the octets that a
     `data` property would return.  If the range extends past the end
     of the blob, that is the octets from `offset` to the end, or no
-    octets if `offset` is past the end.  The algorithm name MUST
-    appear in the server's `supportedDigestAlgorithms` capability.
+    octets if `offset` is past the end.
 
 * size
 
@@ -566,8 +576,7 @@ The requestable properties in the `properties` array are:
     * height: "UnsignedInt\|null"
       Height of the image in pixels, if known.
     * orientation: "UnsignedInt\|null"
-      EXIF orientation value (1-8) as defined in the EXIF
-      specification (CIPA DC-008).  If present, indicates how
+      EXIF orientation value (1-8) as defined in {{EXIF}}.  If present, indicates how
       the image should be rotated/flipped for display.
     * date: "UTCDate\|null"
       Date the image or video was captured (from EXIF
@@ -592,6 +601,10 @@ The requestable properties in the `properties` array are:
     requested in `properties`.  The properties returned for each
     DataSourceObject are controlled by the `dataSourceProperties`
     argument.
+
+A `digest:*` name in `properties` or `dataSourceProperties` whose
+algorithm is not in the server's `supportedDigestAlgorithms`
+capability is rejected with an "invalidArguments" error.
 
 If neither `offset` nor `length` are specified (i.e., both null),
 the default properties are `data` and `size`.  Otherwise, the client
@@ -803,12 +816,13 @@ a download request or as input to another operation).  This allows
 the server to respond quickly to Blob/convert requests while
 deferring expensive work such as image resizing or archive
 creation.  The returned blobId MUST be usable in all contexts
-where a regular blobId is accepted.  If the deferred generation
-later fails (e.g., the source blob has expired), the server
-SHOULD return an appropriate HTTP error when the blob is
-downloaded.  If the exact size of the output is not yet known, the
-server MUST omit the `size` property from the response for that
-creation.  If a client later requests the `size` property via
+where a regular blobId is accepted.  If the exact size of the output
+is not yet known, the server returns a null `size` for that
+creation.  If the deferred generation later fails (e.g., the source
+blob has expired), the server treats the blob as not existing: a
+download returns 404 (Not Found), Blob/get reports it in `notFound`,
+and a creation in Blob/set or Blob/convert that references it fails
+with a "notFound" SetError.  If a client later requests the `size` property via
 Blob/get for a deferred blob, the server MUST generate the blob
 at that point and return the actual size.
 
@@ -922,8 +936,7 @@ results).  It is an object with the following properties:
   types for the chosen archive format with an "invalidProperties"
   error.
 * modified: "UTCDate\|null"
-  The modification time of the entry as an RFC 3339 timestamp.
-  If null, defaults to the current server time.
+  The modification time of the entry.  If null, defaults to the current server time.
 * linkTarget: "String\|null"
   The target path for symlink and hardlink entries.  MUST be non-null
   when entryType is "symlink" or "hardlink".  MUST be null for all
@@ -968,49 +981,8 @@ properties are ignored.
 
 Tar archives are not inherently compressed.  To create a compressed
 tar archive (e.g. a .tar.gz file), first create the tar archive
-using ArchiveRecipe, then compress the result using CompressRecipe.
-The following example creates a .tar.gz containing three files in a
-single Blob/convert call, using a backreference from the archive
-creation to the compression step:
-
-~~~json
-[["Blob/convert", {
-  "accountId": "abc",
-  "create": {
-    "t1": {
-      "archive": {
-        "type": "application/x-tar",
-        "entries": [
-          {
-            "name": "site/index.html",
-            "blobId": "Baaaa",
-            "modified": "2026-03-01T12:00:00Z",
-            "mode": "0644"
-          },
-          {
-            "name": "site/logo.png",
-            "blobId": "Bbbbb",
-            "modified": "2026-02-15T09:30:00Z",
-            "mode": "0644"
-          },
-          {
-            "name": "site/style.css",
-            "blobId": "Bcccc",
-            "modified": "2026-03-01T12:00:00Z",
-            "mode": "0644"
-          }
-        ]
-      }
-    },
-    "t2": {
-      "compress": {
-        "blobId": "#t1",
-        "type": "application/gzip"
-      }
-    }
-  }
-}, "0"]]
-~~~
+using ArchiveRecipe, then compress the result using CompressRecipe
+(see "Creating a Compressed Tar Archive" in "Examples").
 
 ### Considerations for application/x-cpio
 
@@ -1026,13 +998,16 @@ blob.  It is an object with the following properties:
 * blobId: "BlobId"
   The blobId of the archive to extract.
 * type: "String\|null"
-  The MIME type of the archive format.  If null, the server SHOULD
+  The media type of the archive format.  If null, the server SHOULD
   attempt to auto-detect the format from the blob content (e.g. by
   inspecting magic bytes).  If auto-detection fails, the server MUST
   return an "unknownFormat" error.
 
-In addition to the standard creation response properties, a
-successful ExtractRecipe result includes:
+An ExtractRecipe creates no blob.  The `id`, `type`, and `size` in
+its result are those of the archive blob that was extracted, and a
+backreference to its creation id resolves to that blob.  `noPersist`
+has no effect on an ExtractRecipe.  A successful ExtractRecipe
+result also includes:
 
 * entries: "ArchiveEntry[]"
   An array of ArchiveEntry objects describing the contents of the
@@ -1110,7 +1085,7 @@ with the following properties:
 * blobId: "BlobId"
   The blobId of the compressed data to decompress.
 * type: "String\|null"
-  The MIME type of the compression format.  If null, the server SHOULD
+  The media type of the compression format.  If null, the server SHOULD
   attempt to auto-detect the format from magic bytes.  If auto-detection
   fails, the server MUST return an "unknownFormat" error.
 
@@ -1451,8 +1426,9 @@ its contents.  The intermediate decompressed tar blob uses
 }, "0"]]
 ~~~
 
-The response for the ExtractRecipe includes the standard creation
-response properties plus an `entries` array listing the archive
+The response for the ExtractRecipe gives the `id`, `type`, and
+`size` of the archive it extracted, which here is the decompressed
+tar created by "u1", and an `entries` array listing the archive
 contents, with a blobId for each file entry:
 
 ~~~json
@@ -1667,12 +1643,25 @@ Specification document: this document
 
 Security and privacy considerations: this document, Security Considerations
 
-## JMAP Error Code Registrations
+## JMAP Capability Update for urn:ietf:params:jmap:blob
 
-IANA is requested to register the following entries in the "JMAP
-Error Codes" registry:
+IANA is requested to update the "urn:ietf:params:jmap:blob"
+capability, registered by {{JMAP-BLOB}}, as follows:
 
-### unknownDataType
+Capability Name: urn:ietf:params:jmap:blob
+
+Specification document: {{JMAP-BLOB}}, superseded by this document
+
+Intended use: obsolete
+
+Change Controller: IETF
+
+Security and privacy considerations: {{JMAP-BLOB}}, Section 5
+
+## JMAP Error Code Update for unknownDataType
+
+IANA is requested to update the "unknownDataType" entry in the "JMAP
+Error Codes" registry, registered by {{JMAP-BLOB}}, as follows:
 
 JMAP Error Code: unknownDataType
 
@@ -1685,7 +1674,12 @@ in the typeNames array of a Blob/lookup request, or the capability
 required to use that data type has not been included in the `using`
 array of the request.
 
-Reference: this document
+Reference: this document (replacing {{JMAP-BLOB}})
+
+## JMAP Error Code Registrations
+
+IANA is requested to register the following entries in the "JMAP
+Error Codes" registry:
 
 ### unknownFormat
 
@@ -1732,10 +1726,28 @@ Reference: this document
 ## JMAP Data Types Registry
 
 IANA is requested to update the reference for the "JMAP Data Types"
-registry to this document (replacing the reference to RFC9404).
-The registration policy and instructions to the designated experts
-below are carried forward unchanged from RFC9404, so that they
-remain defined in a current document.
+registry to this document (replacing the reference to
+{{JMAP-BLOB}}).  The registry's fields, registration policy, and
+instructions to the designated experts below are carried forward
+unchanged from {{JMAP-BLOB}}, so that they remain defined in a
+current document.  The existing entries are unchanged.
+
+Each entry has the following fields:
+
+Type Name: the name of the data type, as used in `typeNames` in
+Blob/lookup and as a key in a StateChange object ({{JMAP-CORE}},
+Section 7.1).
+
+Can Reference Blobs: "Yes" if objects of this type can reference
+blobs (see "Blob/lookup"), otherwise "No".
+
+Can Use for State Change: "Yes" if the type name can appear in a
+StateChange object, otherwise "No".
+
+Capability: the capability URI that a client includes in `using` to
+use this data type.
+
+Reference: the document that defines the data type.
 
 The registration policy for this registry is "Specification
 Required" {{IANA-POLICY}}.  Either an RFC or a similarly stable reference
@@ -1777,6 +1789,30 @@ The source of this document exists on github at: https://github.com/brong/draft-
 * Restated the registration policy and designated expert guidance
   for the "JMAP Data Types" registry, so they are not left only in
   the obsoleted RFC9404.
+* Blobs have no state, as in RFC9404: Blob/set takes no `ifInState`
+  and returns null `oldState` and `newState`.  (Thanks to Mark
+  Atwood.)
+* The `dataSourceProperties` default is \["blobId", "offset",
+  "length"\], so chunks fed back into Blob/set keep their ranges.
+  (Thanks to Mark Atwood.)
+* Named the SetErrors for Blob/set: "invalidProperties" for an
+  invalid DataSourceObject, "tooLarge" for exceeding
+  `maxDataSources` or `maxSizeBlobSet`, and "notFound" for an unknown
+  blobId.  An unsupported `digest:*` name in Blob/get is
+  "invalidArguments".  (Thanks to Mark Atwood.)
+* BlobObject `size` is null until a deferred Blob/convert result is
+  generated, and a deferred result whose generation fails is treated
+  as not existing everywhere.  (Thanks to Mark Atwood.)
+* The `id`, `type`, and `size` of an ExtractRecipe result are those
+  of the archive it extracted.  (Thanks to Mark Atwood.)
+* IANA: the "urn:ietf:params:jmap:blob" capability is marked
+  obsolete, "unknownDataType" is updated rather than registered
+  again, and the "JMAP Data Types" registry's fields are defined
+  here.  RFC9404 is now an informative reference.  (Thanks to Mark
+  Atwood.)
+* Editorial: removed a duplicate .tar.gz example, used "media type"
+  throughout, added a reference for EXIF, and removed a stray
+  back matter marker from the text.  (Thanks to Mark Atwood.)
 
 **draft-ietf-jmap-blobext-02**
 
@@ -1894,7 +1930,5 @@ The source of this document exists on github at: https://github.com/brong/draft-
 
 The authors would like to thank Mauro De Gennaro, Ben Bucksch,
 Ricardo Signes, Neil Jenkins, Ken Murchison, Arnt Gulbrandsen,
-Seph Gentle, Matthew Horsfall, and the members of the JMAP Working Group at the
+Seph Gentle, Matthew Horsfall, Mark Atwood, and the members of the JMAP Working Group at the
 IETF for their contributions and feedback.
-
-{backmatter}
