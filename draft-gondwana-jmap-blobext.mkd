@@ -26,7 +26,7 @@ normative:
 
 
 informative:
-    IANA-POLICY: RFC8126
+    IANA-GUIDELINES: RFC8126
     JMAP-MAIL: RFC8621
     JMAP-BLOB: RFC9404
     EXIF:
@@ -937,6 +937,9 @@ results).  It is an object with the following properties:
   error.
 * modified: "UTCDate\|null"
   The modification time of the entry.  If null, defaults to the current server time.
+* created: "UTCDate\|null"
+  The creation time of the entry, or null if it has none.  Formats
+  that cannot record a creation time ignore it.
 * linkTarget: "String\|null"
   The target path for symlink and hardlink entries.  MUST be non-null
   when entryType is "symlink" or "hardlink".  MUST be null for all
@@ -969,15 +972,16 @@ results).  It is an object with the following properties:
 
 The zip format only supports "file" and "directory" entry types.
 The `comment` and `compressionMethod` properties are only meaningful
-for zip archives.  The `mode`, `uid`, `gid`, `ownerName`,
+for zip archives.  The `created` time is stored in an extra field.
+The `mode`, `uid`, `gid`, `ownerName`,
 `groupName`, `devMajor`, and `devMinor` properties are ignored.
 
 ### Considerations for application/x-tar
 
 The tar format supports all entry types.  The `mode`, `uid`, `gid`,
 `ownerName`, `groupName`, `devMajor`, and `devMinor` properties are
-meaningful for tar archives.  The `comment` and `compressionMethod`
-properties are ignored.
+meaningful for tar archives.  The `created`, `comment`, and
+`compressionMethod` properties are ignored.
 
 Tar archives are not inherently compressed.  To create a compressed
 tar archive (e.g. a .tar.gz file), first create the tar archive
@@ -987,7 +991,7 @@ using ArchiveRecipe, then compress the result using CompressRecipe
 ### Considerations for application/x-cpio
 
 The cpio format supports all entry types except that `ownerName` and
-`groupName` are not supported.  The `comment` and
+`groupName` are not supported.  The `created`, `comment`, and
 `compressionMethod` properties are ignored.
 
 ## ExtractRecipe
@@ -1750,7 +1754,7 @@ use this data type.
 Reference: the document that defines the data type.
 
 The registration policy for this registry is "Specification
-Required" {{IANA-POLICY}}.  Either an RFC or a similarly stable reference
+Required" {{IANA-GUIDELINES}}.  Either an RFC or a similarly stable reference
 document defines a JMAP Data Type and associated capability.
 
 IANA will appoint designated experts to review requests for
@@ -1766,6 +1770,7 @@ The source of this document exists on github at: https://github.com/brong/draft-
 
 **draft-ietf-jmap-blobext-03**
 
+* Added `created` to ArchiveEntry.
 * Carried over from RFC9404 what this document had lost: Blob/lookup
   does not return ids of objects the user cannot discover, the
   meaning of "reference" and the "Can Reference Blobs" restriction,
