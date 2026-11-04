@@ -852,6 +852,8 @@ or size.  It is an object with the following properties:
   Maximum height in pixels of the image to create.  If null, the
   server preserves the source height (or scales proportionally if
   only `width` is given).
+  Dimensions are those of the image as displayed, after its
+  orientation is applied (see `autoOrient`).
 * ignoreAspect: "Boolean\|null"
   If true, resize to exactly the given width and height, even if
   the aspect ratio is changed.  If null or false, the image is
@@ -875,11 +877,17 @@ or size.  It is an object with the following properties:
 * stripMetadata: "Boolean\|null"
   If true, strip image metadata such as EXIF, XMP, and IPTC data from
   the output.  If null or false, the server preserves metadata where
-  the target format supports it.
-* autoOrient: "Boolean\|null"
-  If true, automatically rotate and flip the image according to its
-  EXIF orientation tag, then reset the tag.  If null or false, the
-  image data is not reoriented.
+  it can.
+* autoOrient: "Boolean\|null" (default: false)
+  If true, the server applies the source image's orientation (such as
+  the EXIF Orientation tag) to the pixel data and gives the output no
+  orientation of its own, so it displays the same in any viewer.  If
+  null or false, the server copies the orientation to the output and
+  leaves the pixel data as it is.  A server that cannot carry the
+  orientation into the output, because the target format has nowhere
+  to keep it, `stripMetadata` is true, or the server cannot write that
+  metadata, MUST apply it as if `autoOrient` were true rather than
+  lose it.  Either way, the output displays as the source does.
 
 Errors:
 
@@ -1767,6 +1775,15 @@ control over the URI namespace to which the capability URI points.
 EDITOR: please remove this section before publication.
 
 The source of this document exists on github at: https://github.com/brong/draft-gondwana-jmap-blobext/
+
+**draft-ietf-jmap-blobext-04**
+
+* `autoOrient` is defined by how the output displays: a server that
+  cannot carry the source's orientation into the output applies it
+  to the pixels instead, whatever `autoOrient` says.  `width` and
+  `height` are those of the image as displayed, and `stripMetadata`
+  false preserves metadata where the server can, not only where the
+  format allows.
 
 **draft-ietf-jmap-blobext-03**
 
