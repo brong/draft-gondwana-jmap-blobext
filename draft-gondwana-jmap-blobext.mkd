@@ -842,6 +842,12 @@ download returns 404 (Not Found), Blob/get reports it in `notFound`,
 and a creation in Blob/set or Blob/convert that references it fails
 with a "blobNotFound" SetError.
 
+Only the Blob/convert response can report `isIncomplete`, so a
+server MUST NOT defer a kind of conversion whose result can be
+incomplete: once its creation has succeeded there is no response left
+to say so.  If generating a deferred blob nonetheless gives an
+incomplete result, the generation has failed, as above.
+
 A deferred blob MUST NOT become the content of an object that
 outlives it, such as a FileNode or an Email: before such an object
 references it, the server generates it, and fails the create or
@@ -1820,6 +1826,8 @@ The source of this document exists on github at: https://github.com/brong/draft-
 * A deferred blob is generated before any lasting object references
   it, and from its inputs as they were at Blob/convert.
 * A `text/x-diff` patch applies exactly, without fuzz.
+* A kind of conversion whose result can be incomplete is never
+  deferred, and a deferred one that turns out incomplete has failed.
 * A creation referring to a blob that doesn't exist fails with
   "blobNotFound", listing the missing blobIds in `notFound`, as
   RFC8621 registers it; "notFound" stays for the ids a /set updates
