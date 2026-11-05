@@ -381,7 +381,12 @@ does not match the actual data.  The server MUST NOT guess the
 user's intent: it MUST reject the creation with an
 "invalidProperties" SetError whose `properties` is \["data"\].  If
 a `blobId` does not exist, or the user cannot access it, the server
-MUST reject the creation with a "notFound" SetError.
+MUST reject the creation with a "blobNotFound" SetError
+({{Section 10.6.3 of JMAP-MAIL}}), with a `notFound` property listing
+each such blobId, as Email/set does ({{Section 4.6 of JMAP-MAIL}}).
+"notFound" is for the ids a /set updates or destroys
+({{Section 5.3 of JMAP-CORE}}), not for the blobs a creation refers
+to.
 
 # Blob/set
 
@@ -835,7 +840,7 @@ creation.  If the deferred generation later fails (e.g., the source
 blob has expired), the server treats the blob as not existing: a
 download returns 404 (Not Found), Blob/get reports it in `notFound`,
 and a creation in Blob/set or Blob/convert that references it fails
-with a "notFound" SetError.
+with a "blobNotFound" SetError.
 
 A deferred blob MUST NOT become the content of an object that
 outlives it, such as a FileNode or an Email: before such an object
@@ -914,7 +919,7 @@ or size.  It is an object with the following properties:
 
 Errors:
 
-* "notFound" — the referenced blobId does not exist.
+* "blobNotFound" — the referenced blobId does not exist.
 * "invalidProperties" — the type is not in
   `supportedImageWriteTypes`, or the source blob is not in a format
   listed in `supportedImageReadTypes`.
@@ -936,7 +941,7 @@ It is an object with the following properties:
 
 Errors:
 
-* "notFound" — a referenced entry blobId does not exist.
+* "blobNotFound" — a referenced entry blobId does not exist.
 * "invalidProperties" — the type is not in `supportedArchiveTypes`;
   an entry has an unsupported entryType for the archive format; or
   a required field (e.g. linkTarget for symlink entries) is missing.
@@ -1051,7 +1056,7 @@ result also includes:
 
 Errors:
 
-* "notFound" — the referenced blobId does not exist.
+* "blobNotFound" — the referenced blobId does not exist.
 * "unknownFormat" — the server could not determine or does not support
   the archive format.
 * "invalidProperties" — the type is not in `supportedExtractTypes`.
@@ -1081,7 +1086,7 @@ algorithm.  It is an object with the following properties:
 
 Errors:
 
-* "notFound" — the referenced blobId does not exist.
+* "blobNotFound" — the referenced blobId does not exist.
 * "invalidProperties" — the type is not in `supportedCompressTypes`.
 * "tooLarge" — the source blob exceeds `maxConvertSize`.
 * "conversionFailed" — the compression failed entirely.
@@ -1126,7 +1131,7 @@ with the following properties:
 
 Errors:
 
-* "notFound" — the referenced blobId does not exist.
+* "blobNotFound" — the referenced blobId does not exist.
 * "unknownFormat" — the server could not determine or does not support
   the compression format.
 * "invalidProperties" — the type is not in `supportedDecompressTypes`.
@@ -1151,7 +1156,7 @@ base blob using PatchRecipe to reconstruct the new blob.
 
 Errors:
 
-* "notFound" — a referenced blobId does not exist.
+* "blobNotFound" — a referenced blobId does not exist.
 * "invalidProperties" — the type is not in `supportedDeltaTypes`.
 * "tooLarge" — a referenced blob exceeds `maxConvertSize`.
 * "conversionFailed" — the delta computation failed entirely.
@@ -1196,7 +1201,7 @@ The result blob is the patched output.
 
 Errors:
 
-* "notFound" — a referenced blobId does not exist.
+* "blobNotFound" — a referenced blobId does not exist.
 * "unknownFormat" — the delta blob is not valid for the specified
   format (e.g., corrupt or malformed delta data).
 * "invalidProperties" — the deltaType is not in `supportedPatchTypes`.
@@ -1815,6 +1820,10 @@ The source of this document exists on github at: https://github.com/brong/draft-
 * A deferred blob is generated before any lasting object references
   it, and from its inputs as they were at Blob/convert.
 * A `text/x-diff` patch applies exactly, without fuzz.
+* A creation referring to a blob that doesn't exist fails with
+  "blobNotFound", listing the missing blobIds in `notFound`, as
+  RFC8621 registers it; "notFound" stays for the ids a /set updates
+  or destroys.
 * Limits are enforced with "tooLarge", not "serverFail", which isn't
   a SetError.
 
