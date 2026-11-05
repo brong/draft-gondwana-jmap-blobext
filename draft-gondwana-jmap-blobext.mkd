@@ -1,7 +1,7 @@
 ---
 title: JMAP Blob Management
 abbrev: JMAP Blob
-docname: draft-ietf-jmap-blobext-03
+docname: draft-ietf-jmap-blobext-04
 submissionType: IETF
 category: std
 updates: 8620
@@ -234,16 +234,21 @@ on server capabilities and permissions for that account:
 * maxConvertSize: "UnsignedInt\|null"
 
     If supplied, the maximum size in octets of any single input
-    blob to a Blob/convert operation.  Requests referencing a blob
-    larger than this value MUST be rejected with a "tooLarge"
-    SetError.  If null, the server does not advertise a specific
+    blob to a Blob/convert operation, and of the blob it produces.
+    Requests referencing a blob larger than this value, or whose
+    result would be larger, MUST be rejected with a "tooLarge"
+    SetError.  A server stops producing a result once it passes the
+    limit, so a small input that expands without bound (such as a
+    compressed "bomb") costs no more than this.  If null, the server does not advertise a specific
     limit but MAY still reject blobs that are too large.
 
 * maxArchiveEntries: "UnsignedInt\|null"
 
     If supplied, the maximum number of entries allowed in an
-    ArchiveRecipe.  Requests exceeding this limit MUST be rejected
-    with a "tooLarge" SetError.  If null, the server does not
+    ArchiveRecipe, counted after expanding any entry that stands
+    for many (such as a FileNode Directory with `recurse`), and in
+    an archive an ExtractRecipe reads.  Requests exceeding this
+    limit MUST be rejected with a "tooLarge" SetError.  If null, the server does not
     advertise a specific limit but MAY still reject requests with
     too many entries.
 
@@ -610,6 +615,14 @@ If neither `offset` nor `length` are specified (i.e., both null),
 the default properties are `data` and `size`.  Otherwise, the client
 MUST specify the `properties` to return.
 
+Data returned inline counts towards the response as a whole, so a
+server MAY reject a Blob/get whose `data`, `data:asText` or
+`data:asBase64` properties would return more than `maxSizeRequest`
+({{JMAP-CORE}}) octets in total with a "requestTooLarge" error.  A
+client that gets one asks for smaller ranges with `offset` and
+`length`, or downloads the blob.  Digests and `size` are not data,
+and do not count.
+
 The response contains a `list` of objects, one per blobId.  Each
 object contains the requested properties plus:
 
@@ -822,7 +835,17 @@ creation.  If the deferred generation later fails (e.g., the source
 blob has expired), the server treats the blob as not existing: a
 download returns 404 (Not Found), Blob/get reports it in `notFound`,
 and a creation in Blob/set or Blob/convert that references it fails
-with a "notFound" SetError.  If a client later requests the `size` property via
+with a "notFound" SetError.
+
+A deferred blob MUST NOT become the content of an object that
+outlives it, such as a FileNode or an Email: before such an object
+references it, the server generates it, and fails the create or
+update that would reference it, with the SetError the generation
+gave, if it can't.  Otherwise the object would point at content that
+may never exist.  The data a deferred blob is generated from is what
+the inputs held when the server processed the Blob/convert, even if
+an input that can change (such as a FileNode named in an
+ArchiveEntry) has changed since.  If a client later requests the `size` property via
 Blob/get for a deferred blob, the server MUST generate the blob
 at that point and return the actual size.
 
@@ -1149,6 +1172,12 @@ memory; servers MAY reject very large blobs with a "tooLarge" error.
 The server produces a unified diff.  Both blobs are interpreted as
 text.  If either blob contains content that cannot be interpreted as
 text, the server MUST return an "unknownFormat" error.
+
+A PatchRecipe applies a `text/x-diff` delta exactly: every hunk's
+context lines MUST match the base blob at the place the hunk gives,
+with no fuzz or offset, or the patch fails with "conversionFailed".
+Applying a hunk somewhere near where it says would give content
+nobody wrote.
 
 ## PatchRecipe
 
@@ -1594,7 +1623,7 @@ memory.  Servers SHOULD impose reasonable limits on archive size,
 number of entries, nesting depth of archives within archives,
 compression ratios (to mitigate zip bomb attacks), and total
 processing time.  Servers SHOULD reject requests that would exceed
-these limits with a "tooLarge" or "serverFail" error as appropriate.
+these limits with a "tooLarge" SetError.
 
 Image conversion can also consume significant resources, especially
 for very large images or high output dimensions.
@@ -1777,6 +1806,17 @@ EDITOR: please remove this section before publication.
 The source of this document exists on github at: https://github.com/brong/draft-gondwana-jmap-blobext/
 
 **draft-ietf-jmap-blobext-04**
+
+* `maxConvertSize` limits a conversion's result as well as its
+  inputs, and `maxArchiveEntries` counts entries after expanding
+  any that stand for many, and applies to extracting too.
+* A Blob/get may be refused with "requestTooLarge" when the data it
+  would return passes `maxSizeRequest`.
+* A deferred blob is generated before any lasting object references
+  it, and from its inputs as they were at Blob/convert.
+* A `text/x-diff` patch applies exactly, without fuzz.
+* Limits are enforced with "tooLarge", not "serverFail", which isn't
+  a SetError.
 
 * `autoOrient` is defined by how the output displays: a server that
   cannot carry the source's orientation into the output applies it
