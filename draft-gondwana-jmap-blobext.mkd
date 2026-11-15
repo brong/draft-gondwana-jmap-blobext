@@ -29,6 +29,7 @@ informative:
     IANA-GUIDELINES: RFC8126
     JMAP-MAIL: RFC8621
     JMAP-BLOB: RFC9404
+    JMAP-CONDITIONAL: I-D.ietf-jmap-conditional
     EXIF:
       title: "Exchangeable image file format for digital still cameras: Exif Version 3.0"
       author:
@@ -98,8 +99,12 @@ in the "capabilities" property.
 A server MAY also advertise `urn:ietf:params:jmap:blob` (as defined
 in {{JMAP-BLOB}}) to support older clients, but a client MUST NOT include
 both `urn:ietf:params:jmap:blob` and `urn:ietf:params:jmap:blob2`
-in the `using` array of the same request.  The blob2 capability
-supersedes the blob capability and does not depend on it.
+in the `using` array of the same request.  A request that includes
+both is not valid, and the server SHOULD reject the whole request
+with a "urn:ietf:params:jmap:error:unknownCapability" error
+({{JMAP-CORE}}, Section 3.6.1), as it would a request whose `using`
+array names a capability that it does not support.  The blob2
+capability supersedes the blob capability and does not depend on it.
 
 The value of this property in the JMAP session "capabilities"
 property MUST be an empty object.
@@ -317,16 +322,16 @@ on server capabilities and permissions for that account:
 # DataSourceObject
 
 A DataSourceObject describes a source of data for use in Blob/set.
-It MUST contain exactly one of either `data:asText` or `data:asBase64`
-(for inline data) or `blobId` (for a reference to an existing blob).
-The `data:asText` and `data:asBase64` properties MUST NOT both be
-present in the same DataSourceObject.
+It MUST contain exactly one of `data:asText` or `data:asBase64` (for
+inline data) or `blobId` (for a reference to an existing blob).  The
+client omits the other two: a DataSourceObject that contains more
+than one of these three properties is invalid, whatever their values.
 
-* data:asText: "String\|null"
+* data:asText: "String"
 
     The data represented as a UTF-8 string.
 
-* data:asBase64: "String\|null"
+* data:asBase64: "String"
 
     The data encoded as base64 ({{BASE64}}).
 
@@ -373,8 +378,9 @@ chunk contributes to the blob (i.e. after applying `offset` and
 When a server provides `size`, `position`, or `digest:*` values in
 a Blob/get response, it MUST calculate them correctly.
 
-A DataSourceObject used in Blob/set is invalid if `data:asText` is
-not valid UTF-8, if `data:asBase64` is not valid base64, if the range
+A DataSourceObject used in Blob/set is invalid if it contains more
+than one of `data:asText`, `data:asBase64`, and `blobId`, or none of
+them, if `data:asText` is not valid UTF-8, if `data:asBase64` is not valid base64, if the range
 given by `offset` and `length` begins or extends past the end of the
 data, or if any `size`, `position`, or `digest:*` value it contains
 does not match the actual data.  The server MUST NOT guess the
@@ -386,7 +392,9 @@ MUST reject the creation with a "blobNotFound" SetError
 each such blobId, as Email/set does ({{Section 4.6 of JMAP-MAIL}}).
 "notFound" is for the ids a /set updates or destroys
 ({{Section 5.3 of JMAP-CORE}}), not for the blobs a creation refers
-to.
+to.  A `blobId` that is a creation id backreference (using the `#`
+prefix) and does not resolve to a blob, for example because that
+creation failed, is a `blobId` that does not exist.
 
 # Blob/set
 
@@ -470,6 +478,14 @@ A BlobCreateObject has the following properties:
     This allows servers to optimise pipelines where intermediate
     blobs are never needed after the request completes.
 
+A `blobId` in a DataSourceObject can be a creation id backreference
+to another entry in the `create` map of the same call.  The server
+MUST resolve the order of dependencies between entries in the
+`create` map and process them in an order such that all
+backreferences are satisfied.  If a dependency cycle is detected,
+all members of the cycle MUST be rejected with an
+"invalidProperties" error.
+
 Inline data (`data:asText` and `data:asBase64`) is part of the JMAP
 request, so it counts towards the server's `maxSizeRequest` limit
 ({{JMAP-CORE}}, Section 2), and base64 makes it about a third larger
@@ -511,6 +527,10 @@ and requires that capability in the request's `using` array.
 This method retrieves blob data.  It is a standard Foo/get method
 ({{JMAP-CORE}}, Section 5.1) with the following additional parameters
 and a custom response.
+
+A server cannot list every blob in an account, so the `ids` argument
+MUST NOT be null.  The server rejects a null `ids` with an
+"invalidArguments" error.
 
 In addition to the standard `accountId`, `ids`, and `properties`
 arguments, Blob/get accepts:
@@ -800,7 +820,8 @@ following properties, which determines the type of conversion:
 
 * patch: PatchRecipe
 
-The response has the same structure as Blob/set: a `created` map of
+The response has the `accountId`, `created`, and `notCreated`
+properties of a Blob/set response, and no others: a `created` map of
 creation id to a BlobObject for each successful conversion, and a
 `notCreated` map of creation id to a SetError object for each failed
 conversion.  The `id` is the blobId of the created blob.  The
@@ -865,6 +886,23 @@ in the `create` map and process them in an order such that all
 backreferences are satisfied.  If a dependency cycle is detected,
 all members of the cycle MUST be rejected with an
 "invalidProperties" error.
+
+A server that does not support a kind of conversion rejects a recipe
+of that kind with an "invalidProperties" error.  The `properties` of
+an "invalidProperties" SetError are there to help a person find the
+problem, so the server lists whatever it judges most useful.
+
+When the request's `using` array also includes
+`urn:ietf:params:jmap:conditional`, Blob/convert accepts the
+"ifUnchangedBy" and "atomic" arguments of {{JMAP-CONDITIONAL}}, which
+mean what they mean for Blob/set.  If "atomic" is true, either every
+conversion in the `create` map succeeds, or the server creates no blob
+and rejects the method with an "atomicFailure" error, which MAY carry
+a `notCreated` map.  A conversion whose result would be incomplete
+has failed for this purpose: the server does not return it with
+`isIncomplete` set, but treats it as it would a "conversionFailed"
+SetError.  A server that cannot apply the method as a unit rejects it
+with a "cannotApplyAtomically" error.
 
 ## ImageConvertRecipe
 
@@ -1237,11 +1275,14 @@ The response:
 ~~~json
 [["Blob/set", {
   "accountId": "abc",
+  "oldState": null,
+  "newState": null,
   "created": {
     "b1": {
       "id": "Babc123",
       "type": "text/plain",
-      "size": 13
+      "size": 13,
+      "expires": "2026-03-08T12:00:00Z"
     }
   },
   "notCreated": null
@@ -1381,7 +1422,8 @@ archive:
     "z1": {
       "id": "B9f2a4e",
       "type": "application/zip",
-      "size": 104857
+      "size": 104857,
+      "expires": "2026-03-08T12:00:00Z"
     }
   },
   "notCreated": {}
@@ -1444,7 +1486,8 @@ from the response:
     "t2": {
       "id": "Bd81c7f",
       "type": "application/gzip",
-      "size": 98304
+      "size": 98304,
+      "expires": "2026-03-08T12:00:00Z"
     }
   },
   "notCreated": {}
@@ -1491,6 +1534,7 @@ contents, with a blobId for each file entry:
       "id": "Be3a901",
       "type": "application/x-tar",
       "size": 102400,
+      "expires": "2026-03-08T12:00:00Z",
       "entries": [
         {
           "name": "site/index.html",
@@ -1553,7 +1597,8 @@ The response contains the delta blob:
     "d1": {
       "id": "Bdelta789",
       "type": "text/x-diff",
-      "size": 1234
+      "size": 1234,
+      "expires": "2026-03-08T12:00:00Z"
     }
   },
   "notCreated": {}
@@ -1587,7 +1632,8 @@ The result is a blob identical to "BnewVersion":
     "p1": {
       "id": "Breconstructed",
       "type": "application/octet-stream",
-      "size": 48576
+      "size": 48576,
+      "expires": "2026-03-08T12:00:00Z"
     }
   },
   "notCreated": {}
@@ -1834,6 +1880,24 @@ The source of this document exists on github at: https://github.com/brong/draft-
   or destroys.
 * Limits are enforced with "tooLarge", not "serverFail", which isn't
   a SetError.
+
+* Blob/convert accepts the "ifUnchangedBy" and "atomic" arguments of
+  {{JMAP-CONDITIONAL}}; an incomplete result fails an atomic
+  Blob/convert.  (Thanks to Mark Atwood.)
+
+* A request with both `urn:ietf:params:jmap:blob` and
+  `urn:ietf:params:jmap:blob2` in `using` is rejected as a whole.
+* A DataSourceObject has exactly one of `data:asText`,
+  `data:asBase64`, and `blobId`; the others are omitted, not null.
+* Blob/set creations can refer to each other, with the same cycle
+  rule as Blob/convert; a backreference that does not resolve fails
+  with "blobNotFound".
+* Blob/get rejects a null `ids` with "invalidArguments".
+* The Blob/convert response has only `accountId`, `created`, and
+  `notCreated`; a recipe of an unsupported kind is
+  "invalidProperties".
+* The examples show `oldState`, `newState`, and `expires`.
+  (Thanks to Mark Atwood for all of these.)
 
 * `autoOrient` is defined by how the output displays: a server that
   cannot carry the source's orientation into the output applies it
